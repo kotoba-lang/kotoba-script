@@ -156,10 +156,11 @@
         functions (set function-names)
         exports (vec (or (:exports kir) function-names))
         _ (when-not (and (= (count exports) (count (distinct exports)))
+                         (seq exports)
                          (every? functions exports))
             (fail! "KIR exports are invalid" {:exports exports}))
         entry (:entry kir)
-        _ (when-not (contains? functions entry)
+        _ (when (and entry (not (contains? functions entry)))
             (fail! "KIR entry is missing" {:entry entry}))
         caps (capability-ids kir)
         function-source
@@ -172,8 +173,8 @@
                        (:functions kir)))
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
-             "',kirFormat:'" (name supported-kir-format) "',entry:'" entry
-             "',sourceDigest:" (js-string source-digest)
+             "',kirFormat:'" (name supported-kir-format) "',entry:" (js-string (some-> entry str))
+             ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
              ",requiredCapabilities:Object.freeze([" (str/join "," caps) "])});\n"

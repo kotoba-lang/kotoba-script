@@ -46,6 +46,21 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exports are invalid"
                         (script/emit (assoc kir :exports ['missing])))))
 
+(deftest library-module-needs-exports-but-not-an-entry
+  (let [source (script/emit {:format :kotoba.kir/v3 :entry nil :exports ['add1]
+                             :effects #{}
+                             :functions [{:name 'add1 :params ['x] :body '(+ x 1)}]})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(m.kotobaArtifact.entry!==null||x.add1(41n)!==42n)process.exit(2)})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (re-find #"entry:null" source)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exports are invalid"
+                        (script/emit {:format :kotoba.kir/v3 :entry nil :exports []
+                                      :effects #{} :functions []}))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo
