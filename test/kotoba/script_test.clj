@@ -61,6 +61,45 @@
                         (script/emit {:format :kotoba.kir/v3 :entry nil :exports []
                                       :effects #{} :functions []}))))
 
+(deftest typed-bounded-strings-preserve-values-through-the-frozen-api
+  (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['greet 'byte-length]
+                   :effects #{}
+                   :functions [{:name 'greet :params ['name] :param-types [:string]
+                                :result :string :effects #{}
+                                :body '(string-concat "こんにちは、" name)}
+                               {:name 'byte-length :params ['value] :param-types [:string]
+                                :result :i64 :effects #{}
+                                :body '(string-byte-length value)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.greet('言葉')!=='こんにちは、言葉')process.exit(2);"
+                "if(x['byte-length']('言葉')!==6n)process.exit(3);"
+                "try{x.greet(1n);process.exit(4)}catch(e){if(e.message!=='invalid-string')process.exit(5)}"
+                "try{x.greet('x'.repeat(65536));process.exit(6)}catch(e){if(e.message!=='string-too-large')process.exit(7)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (re-find #"kirFormat:'v4'" source))
+    (is (re-find #"invalid-utf16" source)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"type mismatch"
+                        (script/emit {:format :kotoba.kir/v4 :entry nil :exports ['bad]
+                                      :effects #{}
+                                      :functions [{:name 'bad :params [] :param-types []
+                                                   :result :string :effects #{} :body 1}]})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exceeds byte limit"
+                        (script/emit {:format :kotoba.kir/v4 :entry nil :exports ['large]
+                                      :effects #{}
+                                      :functions [{:name 'large :params [] :param-types []
+                                                   :result :string :effects #{}
+                                                   :body (apply str (repeat 4097 "x"))}]})))
+  (let [unpaired (String. (char-array [(char 0xd800)]))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unpaired high surrogate"
+                          (script/emit {:format :kotoba.kir/v4 :entry nil :exports ['bad]
+                                        :effects #{}
+                                        :functions [{:name 'bad :params [] :param-types []
+                                                     :result :string :effects #{} :body unpaired}]})))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo
