@@ -6,7 +6,10 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def supported-kir-format :kotoba.kir/v3)
+(def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
+(def ^:private value-types #{:i64 :string})
+(def ^:private max-string-literal-bytes 4096)
+(def ^:private max-string-value-bytes 65536)
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -39,6 +42,153 @@
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
 
+(defn- utf8-byte-count
+  "Count UTF-8 bytes while rejecting unpaired UTF-16 surrogates. Java's
+  default encoder replaces malformed input, so validation must be explicit."
+  [^String value]
+  (loop [index 0 total 0]
+    (if (= index (count value))
+      total
+      (let [unit (int (.charAt value index))]
+        (cond
+          (<= unit 0x7f) (recur (inc index) (inc total))
+          (<= unit 0x7ff) (recur (inc index) (+ total 2))
+          (<= 0xd800 unit 0xdbff)
+          (if (< (inc index) (count value))
+            (let [next-unit (int (.charAt value (inc index)))]
+              (if (<= 0xdc00 next-unit 0xdfff)
+                (recur (+ index 2) (+ total 4))
+                (fail! "KIR string contains an unpaired high surrogate" {:index index})))
+            (fail! "KIR string contains an unpaired high surrogate" {:index index}))
+          (<= 0xdc00 unit 0xdfff)
+          (fail! "KIR string contains an unpaired low surrogate" {:index index})
+          :else (recur (inc index) (+ total 3)))))))
+
+(defn- typed-signatures [kir]
+  (let [typed? (= :kotoba.kir/v4 (:format kir))]
+    (into {}
+          (map (fn [{:keys [name params param-types result]}]
+                 (let [types (if typed? param-types (vec (repeat (count params) :i64)))
+                       result-type (if typed? result :i64)]
+                   (when-not (and (symbol? name) (nil? (namespace name))
+                                  (vector? params) (vector? types)
+                                  (every? #(and (symbol? %) (nil? (namespace %))) params)
+                                  (= (count params) (count (distinct params)))
+                                  (= (count params) (count types))
+                                  (every? value-types types)
+                                  (contains? value-types result-type))
+                     (fail! "KIR function type signature is invalid" {:function name}))
+                   [name {:params params :param-types types :result result-type}])))
+          (:functions kir))))
+
+(declare infer-type)
+
+(defn- require-type! [actual expected form]
+  (when-not (= expected actual)
+    (fail! "KIR expression type mismatch"
+           {:expected expected :actual actual :node form})))
+
+(defn- require-arity! [op args expected]
+  (when-not (cond
+              (= expected :positive) (pos? (count args))
+              (set? expected) (contains? expected (count args))
+              :else (= expected (count args)))
+    (fail! "KIR operation arity mismatch"
+           {:operation op :expected expected :actual (count args)})))
+
+(defn- infer-call-type [op args env signatures]
+  (let [types (mapv #(infer-type % env signatures) args)]
+    (cond
+      (contains? '#{+ - * quot bit-xor bit-and} op)
+      (do (require-arity! op args (if (contains? '#{quot bit-xor bit-and} op)
+                                    2 :positive))
+          (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
+
+      (contains? '#{= < > <= >=} op)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
+
+      (= op 'pair)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
+      (contains? '#{pair-first pair-second} op)
+      (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :i64)
+      (= op 'cap-call)
+      (do (require-arity! op args 2) (require-type! (second types) :i64 (second args)) :i64)
+
+      (= op 'string-byte-length)
+      (do (require-arity! op args 1) (require-type! (first types) :string (first args)) :i64)
+      (= op 'string=?)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'string-concat)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
+
+      (contains? signatures op)
+      (let [{expected :param-types result :result} (get signatures op)]
+        (when-not (= (count expected) (count types))
+          (fail! "KIR function call arity mismatch" {:function op}))
+        (doseq [[arg actual wanted] (map vector args types expected)]
+          (require-type! actual wanted arg))
+        result)
+
+      :else (fail! "unsupported KIR operation" {:operation op}))))
+
+(defn- infer-type [form env signatures]
+  (cond
+    (integer? form) :i64
+    (string? form)
+    (let [bytes (utf8-byte-count form)]
+      (when (> bytes max-string-literal-bytes)
+        (fail! "KIR string literal exceeds byte limit"
+               {:bytes bytes :limit max-string-literal-bytes}))
+      :string)
+    (symbol? form) (or (get env form)
+                       (fail! "unbound KIR symbol" {:symbol form}))
+    (seq? form)
+    (let [[op & args] form]
+      (case op
+        let (let [[bindings body] args]
+              (when-not (and (= 2 (count args)) (vector? bindings) (even? (count bindings)))
+                (fail! "KIR let shape is invalid" {:node form}))
+              (loop [pairs (partition 2 bindings) current env]
+                (if-let [[name value] (first pairs)]
+                  (recur (next pairs) (assoc current name (infer-type value current signatures)))
+                  (infer-type body current signatures))))
+        if (let [[test then else] args
+                 _ (require-arity! op args 3)
+                 test-type (infer-type test env signatures)
+                 then-type (infer-type then env signatures)
+                 else-type (infer-type else env signatures)]
+             (require-type! test-type :i64 test)
+             (when-not (= then-type else-type)
+               (fail! "KIR if branches have different types"
+                      {:then then-type :else else-type :node form}))
+             then-type)
+        do (do (when (empty? args) (fail! "KIR do requires a value" {:node form}))
+               (last (mapv #(infer-type % env signatures) args)))
+        (infer-call-type op args env signatures)))
+    :else (fail! "unsupported KIR node" {:node form})))
+
+(defn- validate-types! [kir]
+  (let [signatures (typed-signatures kir)
+        literal-bytes (reduce + 0
+                              (map utf8-byte-count
+                                   (filter string?
+                                           (mapcat #(tree-seq coll? seq (:body %))
+                                                   (:functions kir)))))]
+    (when (> literal-bytes max-string-value-bytes)
+      (fail! "KIR module string literals exceed byte limit"
+             {:bytes literal-bytes :limit max-string-value-bytes}))
+    (doseq [{:keys [name params param-types result body]} (:functions kir)]
+      (let [types (if (= :kotoba.kir/v4 (:format kir))
+                    param-types (vec (repeat (count params) :i64)))
+            actual (infer-type body (zipmap params types) signatures)
+            expected (if (= :kotoba.kir/v4 (:format kir)) result :i64)]
+        (require-type! actual expected name)))
+    signatures))
+
 (declare emit-expr)
 
 (defn- emit-call [op args env functions]
@@ -59,6 +209,9 @@
       (= op 'pair-first) (str (a (first args)) "[0]")
       (= op 'pair-second) (str (a (first args)) "[1]")
       (= op 'cap-call) (str "callCapability(" (first args) "," (a (second args)) ")")
+      (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
+      (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
+      (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
       (contains? functions op)
       (str (js-name op) "(" (str/join "," (map a args)) ")")
       :else (fail! "unsupported KIR operation" {:operation op}))))
@@ -66,6 +219,7 @@
 (defn emit-expr [form env functions]
   (cond
     (integer? form) (bigint-literal form)
+    (string? form) (js-string form)
     (symbol? form) (or (get env form)
                        (fail! "unbound KIR symbol" {:symbol form}))
     (seq? form)
@@ -150,10 +304,13 @@
   "Emit a restricted ESM string from checked `:kotoba.kir/v3` data."
   ([kir] (emit kir {}))
   ([kir {:keys [source-digest kir-digest compiler-version]}]
-  (when-not (= supported-kir-format (:format kir))
+  (when-not (contains? supported-kir-formats (:format kir))
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
         functions (set function-names)
+        _ (when-not (= (count function-names) (count functions))
+            (fail! "KIR function names are not unique" {:functions function-names}))
+        signatures (validate-types! kir)
         exports (vec (or (:exports kir) function-names))
         _ (when-not (and (= (count exports) (count (distinct exports)))
                          (seq exports)
@@ -166,14 +323,22 @@
         function-source
         (str/join "\n"
                   (map (fn [{:keys [name params body]}]
-                         (let [env (into {} (map (juxt identity js-name) params))]
+                         (let [env (into {} (map (juxt identity js-name) params))
+                               {:keys [param-types result]} (get signatures name)
+                               guards (apply str
+                                             (map (fn [param type]
+                                                    (str (js-name param) "="
+                                                         (if (= type :string) "assertString(" "assertI64(")
+                                                         (js-name param) ");"))
+                                                  params param-types))]
                            (str "function " (js-name name) "("
-                                (str/join "," (map js-name params)) "){charge();return "
-                                (emit-expr body env functions) ";}")))
+                                (str/join "," (map js-name params)) "){charge();" guards "return "
+                                (if (= result :string) "assertString(" "assertI64(")
+                                (emit-expr body env functions) ");}")))
                        (:functions kir)))
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
-             "',kirFormat:'" (name supported-kir-format) "',entry:" (js-string (some-> entry str))
+             "',kirFormat:'" (name (:format kir)) "',entry:" (js-string (some-> entry str))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -183,7 +348,16 @@
              "const required=[" (str/join "," caps) "];"
              "if(grantIds.length!==required.length||grantIds.some((v,i)=>v!==required[i]))"
              "throw new Error('capability-grant-mismatch');"
-             "const i64=n=>BigInt.asIntN(64,n);let fuel=256;"
+             "const i64=n=>BigInt.asIntN(64,n);"
+             "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
+             "const utf8Bytes=s=>{let n=0;for(let i=0;i<s.length;i++){const u=s.charCodeAt(i);"
+             "if(u<=127)n++;else if(u<=2047)n+=2;else if(u>=55296&&u<=56319){"
+             "if(i+1>=s.length)throw new Error('invalid-utf16');const l=s.charCodeAt(++i);"
+             "if(l<56320||l>57343)throw new Error('invalid-utf16');n+=4;}"
+             "else if(u>=56320&&u<=57343)throw new Error('invalid-utf16');else n+=3;}return n;};"
+             "const assertString=v=>{if(typeof v!=='string')throw new Error('invalid-string');"
+             "if(utf8Bytes(v)>" max-string-value-bytes ")throw new Error('string-too-large');return v;};"
+             "let fuel=256;"
              "const charge=()=>{fuel--;if(fuel<0)throw new Error('fuel-exhausted');};"
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"
              "if(a===-9223372036854775808n&&b===-1n)throw new Error('signed-division-overflow');return a/b;};"
