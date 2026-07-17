@@ -339,6 +339,11 @@
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
              "',kirFormat:'" (name (:format kir)) "',entry:" (js-string (some-> entry str))
+             ",valueProfile:'" (if (= :kotoba.kir/v4 (:format kir)) "typed-v1" "i64-v1") "'"
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",stringLimits:Object.freeze({literalBytes:" max-string-literal-bytes
+                    ",moduleLiteralBytes:" max-string-value-bytes
+                    ",valueBytes:" max-string-value-bytes "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)

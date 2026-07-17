@@ -81,6 +81,9 @@
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (re-find #"kirFormat:'v4'" source))
+    (is (re-find #"valueProfile:'typed-v1'" source))
+    (is (re-find #"stringLimits:Object.freeze\(\{literalBytes:4096,moduleLiteralBytes:65536,valueBytes:65536\}\)"
+                 source))
     (is (re-find #"invalid-utf16" source)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"type mismatch"
                         (script/emit {:format :kotoba.kir/v4 :entry nil :exports ['bad]
