@@ -34,6 +34,18 @@
     (is (not (re-find #"1n = 2n" source)))
     (is (re-find #"capability-grant-mismatch" source))))
 
+(deftest explicit-exports-hide-internal-functions
+  (let [source (script/emit (assoc kir :exports ['main]))
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.main()!==42n||Object.hasOwn(x,'add1'))process.exit(2)})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (not (re-find #"'add1':k\$add1" source))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exports are invalid"
+                        (script/emit (assoc kir :exports ['missing])))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo

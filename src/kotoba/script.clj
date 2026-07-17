@@ -154,6 +154,10 @@
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
         functions (set function-names)
+        exports (vec (or (:exports kir) function-names))
+        _ (when-not (and (= (count exports) (count (distinct exports)))
+                         (every? functions exports))
+            (fail! "KIR exports are invalid" {:exports exports}))
         entry (:entry kir)
         _ (when-not (contains? functions entry)
             (fail! "KIR entry is missing" {:entry entry}))
@@ -185,5 +189,5 @@
              "const callCapability=(id,value)=>{const f=grants[id];"
              "if(typeof f!=='function')throw new Error('capability-denied:'+id);return i64(BigInt(f(value)));};\n"
              function-source "\n"
-             "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (js-name f))) function-names)) "});\n}\n")]
+             "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (js-name f))) exports)) "});\n}\n")]
     (verify-output! source))))
