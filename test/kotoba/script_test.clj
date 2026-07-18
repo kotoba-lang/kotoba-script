@@ -670,7 +670,7 @@
                      "const p=x.present(),n=x.missing();"
                      "if(p[1]!==true||p[2]!==2n||n[1]!==false||x.updated()!==1n)process.exit(2)})"))]
     (is (zero? (:exit result)) (:err result))
-    (is (str/includes? source "typedMapLimits:Object.freeze({entries:32})"))))
+    (is (str/includes? source "typedMapLimits:Object.freeze({entries:31})"))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]

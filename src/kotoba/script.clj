@@ -19,7 +19,7 @@
 (def ^:private max-variant-cases 32)
 (def ^:private max-heterogeneous-vector-items 32)
 (def ^:private max-set-items 32)
-(def ^:private max-typed-map-entries 32)
+(def ^:private max-typed-map-entries 31)
 (def ^:private max-record-fields 32)
 
 (declare fail!)
