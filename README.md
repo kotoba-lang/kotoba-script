@@ -89,6 +89,17 @@ on canonical values; updates never mutate their input. The total order covers
 every currently admitted scalar and structured value type, so neither
 JavaScript insertion order nor object identity participates in set semantics.
 
+Nominal bounded records use
+`[:record :qualified/type [[:field field-type] ...]]`, with 1--32 unique
+keyword fields in declaration order under the shared depth/node budget. Their
+canonical host value is `[descriptor, field-value ...]`; the complete nominal
+schema, exact arity, and every field value are revalidated at each boundary.
+Construction supplies every field exactly once in declaration order. Field
+projection and persistent replacement require an admission-time declared
+keyword literal, making their types static and excluding dynamic property,
+prototype, sparse-object, and unknown-field behavior. Equality is structural
+only after exact descriptor validation.
+
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
 as signed i64 at every exported boundary. `vector-get` has a lazy explicit

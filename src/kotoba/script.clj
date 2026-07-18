@@ -18,6 +18,7 @@
 (def ^:private max-variant-cases 32)
 (def ^:private max-heterogeneous-vector-items 32)
 (def ^:private max-set-items 32)
+(def ^:private max-record-fields 32)
 
 (declare fail!)
 
@@ -53,6 +54,20 @@
      (and (vector? type) (= 2 (count type)) (= :set (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
+     (and (vector? type) (= 3 (count type)) (= :record (first type)))
+     (let [[_ type-id fields] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (fail! "record type id must be a qualified keyword" {:type type}))
+       (when-not (and (vector? fields) (seq fields) (<= (count fields) max-record-fields)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) fields)
+                      (= (count fields) (count (distinct (map first fields)))))
+         (fail! "record fields must be a non-empty unique bounded vector" {:type type}))
+       (vswap! nodes + (+ 2 (* 2 (count fields))))
+       (when (> @nodes max-type-nodes)
+         (fail! "KIR value type exceeds node limit" {:limit max-type-nodes}))
+       (doseq [[_ field-type] fields]
+         (validate-value-type! field-type (inc depth) nodes))
+       type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -83,6 +98,9 @@
 
 (defn- typed-set-type? [type]
   (and (vector? type) (= 2 (count type)) (= :set (first type))))
+
+(defn- record-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :record (first type))))
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -116,7 +134,7 @@
   (if (string? value) (pr-str value) "null"))
 
 (declare validate-value-type! parametric-result-type? variant-type? generic-option-type?
-         heterogeneous-vector-type? typed-set-type?)
+         heterogeneous-vector-type? typed-set-type? record-type?)
 
 (defn- type-js [type]
   (validate-value-type! type)
@@ -132,6 +150,12 @@
          (str/join "," (map type-js (second type))) "])])")
     (typed-set-type? type)
     (str "Object.freeze(['set'," (type-js (second type)) "])")
+    (record-type? type)
+    (str "Object.freeze(['record'," (pr-str (str (second type))) ",Object.freeze(["
+         (str/join "," (map (fn [[field field-type]]
+                              (str "Object.freeze([" (pr-str (str field)) ","
+                                   (type-js field-type) "] )"))
+                            (nth type 2))) "])])")
     :else
     (str "Object.freeze(['variant'," (pr-str (str (second type))) ",Object.freeze(["
          (str/join "," (map (fn [[tag payload-type]]
@@ -141,7 +165,7 @@
 
 (defn- guard-expr [type expression]
   (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
-          (heterogeneous-vector-type? type) (typed-set-type? type))
+          (heterogeneous-vector-type? type) (typed-set-type? type) (record-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
            :string "assertString("
@@ -655,6 +679,50 @@
           (require-type! (infer-type left env signatures) type left)
           (require-type! (infer-type right env signatures) type right)
           :i64)
+        record-new
+        (let [[type & values] args
+              fields (when (record-type? type) (nth type 2))]
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (= (count fields) (count values)))
+            (fail! "record constructor must exactly match its descriptor"
+                   {:type type :values (count values)}))
+          (doseq [[[field field-type] value] (map vector fields values)]
+            (require-type! (infer-type value env signatures) field-type field))
+          type)
+        record-get
+        (let [[type value field] args
+              fields (when (record-type? type) (nth type 2))
+              field-type (some (fn [[declared-field declared-type]]
+                                 (when (= declared-field field) declared-type)) fields)]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (keyword? field) field-type)
+            (fail! "record field must be a declared keyword literal"
+                   {:type type :field field}))
+          (require-type! (infer-type value env signatures) type value)
+          field-type)
+        record-assoc
+        (let [[type value field replacement] args
+              fields (when (record-type? type) (nth type 2))
+              field-type (some (fn [[declared-field declared-type]]
+                                 (when (= declared-field field) declared-type)) fields)]
+          (require-arity! op args 4)
+          (validate-value-type! type)
+          (when-not (and (record-type? type) (keyword? field) field-type)
+            (fail! "record field must be a declared keyword literal"
+                   {:type type :field field}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type replacement env signatures) field-type replacement)
+          type)
+        record-equal
+        (let [[type left right] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (record-type? type)
+            (fail! "record equality requires a record descriptor" {:type type}))
+          (require-type! (infer-type left env signatures) type left)
+          (require-type! (infer-type right env signatures) type right)
+          :i64)
         (infer-call-type op args env signatures)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -777,6 +845,18 @@
            (a (nth args 2)) ")")
       (= op 'typed-set-equal)
       (str "(typedSetEqual(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")?1n:0n)")
+      (= op 'record-new)
+      (str "makeRecord(" (type-js (first args)) ",["
+           (str/join "," (map a (rest args))) "])")
+      (= op 'record-get)
+      (str "recordGet(" (type-js (first args)) "," (a (second args)) ","
+           (pr-str (str (nth args 2))) ")")
+      (= op 'record-assoc)
+      (str "recordAssoc(" (type-js (first args)) "," (a (second args)) ","
+           (pr-str (str (nth args 2))) "," (a (nth args 3)) ")")
+      (= op 'record-equal)
+      (str "(recordEqual(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")?1n:0n)")
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
@@ -989,6 +1069,8 @@
                     max-heterogeneous-vector-items "})"))
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",typedSetLimits:Object.freeze({items:" max-set-items "})"))
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",recordLimits:Object.freeze({fields:" max-record-fields "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -1038,6 +1120,12 @@
              "items.sort((a,b)=>compareTyped(t[1],a,b));"
              "for(let i=1;i<items.length;i++)if(compareTyped(t[1],items[i-1],items[i])===0)"
              "throw new Error('duplicate-set-item');return Object.freeze([t,Object.freeze(items)]);}"
+             "if(Array.isArray(t)&&t.length===3&&t[0]==='record'){"
+             "if(!Array.isArray(t[2])||t[2].length<1||t[2].length>" max-record-fields
+             "||!Array.isArray(v)||v.length!==t[2].length+1||!sameType(v[0],t))"
+             "throw new Error('invalid-record');const out=[t];"
+             "for(let i=0;i<t[2].length;i++)out.push(assertTypedValue(t[2][i][1],v[i+1],d+1,s));"
+             "return Object.freeze(out);}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='option'){"
              "if(!Array.isArray(v)||!sameType(v[0],t)||typeof v[1]!=='boolean'||"
              "(v[1]&&v.length!==3)||(!v[1]&&v.length!==2))throw new Error('invalid-generic-option');"
@@ -1087,6 +1175,7 @@
              "if(Array.isArray(t)&&t[0]==='vector')return compareList(t[1],a.slice(1),b.slice(1));"
              "if(Array.isArray(t)&&t[0]==='set'){const ai=a[1],bi=b[1],n=Math.min(ai.length,bi.length);"
              "for(let i=0;i<n;i++){const c=compareTyped(t[1],ai[i],bi[i]);if(c)return c;}return cmp(ai.length,bi.length);}"
+             "if(Array.isArray(t)&&t[0]==='record')return compareList(t[2].map(f=>f[1]),a.slice(1),b.slice(1));"
              "throw new Error('unordered-value-type');};"
              "const assertTypedSet=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
              "const makeTypedSet=(t,items)=>assertTypedSet(t,[t,items]);"
@@ -1099,6 +1188,15 @@
              "return makeTypedSet(t,v[1].filter(x=>compareTyped(t[1],x,item)!==0));};"
              "const typedSetEqual=(t,a,b)=>{a=assertTypedSet(t,a);b=assertTypedSet(t,b);"
              "return a[1].length===b[1].length&&a[1].every((x,i)=>compareTyped(t[1],x,b[1][i])===0);};"
+             "const assertRecord=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const makeRecord=(t,values)=>assertRecord(t,[t,...values]);"
+             "const recordFieldIndex=(t,field)=>{const i=t[2].findIndex(f=>f[0]===field);"
+             "if(i<0)throw new Error('unknown-record-field');return i;};"
+             "const recordGet=(t,v,field)=>{v=assertRecord(t,v);return v[recordFieldIndex(t,field)+1];};"
+             "const recordAssoc=(t,v,field,value)=>{v=assertRecord(t,v);const i=recordFieldIndex(t,field);"
+             "const out=v.slice();out[i+1]=assertTypedValue(t[2][i][1],value,1,{nodes:0});return assertRecord(t,out);};"
+             "const recordEqual=(t,a,b)=>{a=assertRecord(t,a);b=assertRecord(t,b);"
+             "return compareList(t[2].map(f=>f[1]),a.slice(1),b.slice(1))===0;};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"

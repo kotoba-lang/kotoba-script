@@ -478,6 +478,61 @@
                            (assoc-in kir [:functions 0 :body]
                                      (list 'typed-set-new type "wrong")))))))
 
+(deftest bounded-records-seal-schema-field-order-and-persistent-updates
+  (let [type [:record :demo/person [[:name :string] [:age :i64]
+                                     [:nickname [:option :string]]]]
+        other-type [:record :demo/account [[:name :string] [:age :i64]
+                                            [:nickname [:option :string]]]]
+        option-type [:option :string]
+        kir {:format :kotoba.kir/v4 :entry nil
+             :exports ['make 'name-of 'birthday 'same?] :effects #{}
+             :functions
+             [{:name 'make :params [] :param-types [] :result type :effects #{}
+               :body (list 'record-new type "Kotoba" 7
+                           (list 'option-none-of option-type))}
+              {:name 'name-of :params ['value] :param-types [type]
+               :result :string :effects #{}
+               :body (list 'record-get type 'value :name)}
+              {:name 'birthday :params ['value 'age] :param-types [type :i64]
+               :result type :effects #{}
+               :body (list 'record-assoc type 'value :age 'age)}
+              {:name 'same? :params ['left 'right] :param-types [type type]
+               :result :i64 :effects #{}
+               :body (list 'record-equal type 'left 'right)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),v=x.make(),u=x.birthday(v,8n);"
+                "if(x['name-of'](v)!=='Kotoba'||v[2]!==7n||u[2]!==8n||v[2]!==7n)process.exit(2);"
+                "if(!Object.isFrozen(v)||!Object.isFrozen(v[0])||x['same?'](v,u)!==0n||x['same?'](v,v)!==1n)process.exit(3);"
+                "const ot=Object.freeze(['record',':demo/account',Object.freeze([Object.freeze([':name','string']),Object.freeze([':age','i64']),Object.freeze([':nickname',Object.freeze(['option','string'])])])]);"
+                "try{x['name-of']([ot,'Kotoba',7n,[Object.freeze(['option','string']),false]]);process.exit(4)}"
+                "catch(e){if(e.message!=='invalid-record')process.exit(5)}"
+                "try{x['name-of']([v[0],'Kotoba']);process.exit(6)}catch(e){if(e.message!=='invalid-record')process.exit(7)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "recordLimits:Object.freeze({fields:32})"))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"declared keyword literal"
+                          (script/emit
+                           (assoc-in kir [:functions 1 :body]
+                                     (list 'record-get type 'value :missing)))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"expression type mismatch"
+                          (script/emit
+                           (assoc-in kir [:functions 0 :body]
+                                     (list 'record-new type 7 7
+                                           (list 'option-none-of option-type))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unique bounded vector"
+                          (script/emit
+                           (assoc-in kir [:functions 0 :result]
+                                     [:record :demo/bad [[:x :i64] [:x :string]]]))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unique bounded vector"
+                          (script/emit
+                           (assoc-in kir [:functions 0 :result]
+                                     [:record :demo/large
+                                      (mapv (fn [i] [(keyword (str "f" i)) :i64])
+                                            (range 33))]))))
+    (is (not= type other-type))))
+
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil
