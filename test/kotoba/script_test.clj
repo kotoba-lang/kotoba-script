@@ -286,7 +286,7 @@
                 "catch(e){if(!['invalid-string','invalid-i64'].includes(e.message))process.exit(6)}}})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
-    (is (str/includes? source "parametricAdtLimits:Object.freeze({depth:8,nodes:64})")))
+    (is (str/includes? source "parametricAdtLimits:Object.freeze({depth:8,nodes:64,variantCases:32})")))
   (let [too-deep (nth (iterate (fn [t] [:result :i64 t]) :bool) 9)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"depth limit"
                           (script/emit
@@ -322,6 +322,39 @@
                           (script/emit
                            (assoc-in executable [:functions 0 :body]
                                      (list 'result-match-of type 'r :bad 1 'code 'code)))))))
+
+(deftest closed-variants-own-identity-payloads-and-exhaustive-matches
+  (let [type [:variant :demo/status [[:ready :i64] [:failed :string]]]
+        branches [[:ready 'n '(+ n 1)] [:failed 'message '(string-byte-length message)]]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['ready 'describe] :effects #{}
+             :functions
+             [{:name 'ready :params [] :param-types [] :result type :effects #{}
+               :body (list 'variant-new type :ready 7)}
+              {:name 'describe :params ['value] :param-types [type] :result :i64 :effects #{}
+               :body (list 'variant-match type 'value branches)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "const t=Object.freeze(['variant',':demo/status',Object.freeze([Object.freeze([':ready','i64']),Object.freeze([':failed','string'])])]);"
+                "const r=x.ready();if(r[1]!==':ready'||r[2]!==7n||!Object.isFrozen(r))process.exit(2);"
+                "if(x.describe([t,':ready',9n])!==10n||x.describe([t,':failed','安全'])!==6n)process.exit(3);"
+                "try{x.describe([t,':unknown',1n]);process.exit(4)}catch(e){if(e.message!=='unknown-variant-case')process.exit(5)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "variantCases:32"))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly cover"
+                          (script/emit (assoc-in kir [:functions 1 :body]
+                                                 (list 'variant-match type 'value (vec (reverse branches)))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"expression type mismatch"
+                          (script/emit (assoc-in kir [:functions 0 :body]
+                                                 (list 'variant-new type :ready "wrong"))))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"qualified keyword"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                          :functions [{:name 'bad :params [] :param-types []
+                                       :result [:variant :status [[:ready :i64]]]
+                                       :effects #{} :body 0}]}))))
 
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir

@@ -53,6 +53,15 @@ contains exactly one ok binder/body and one err binder/body; both binders are
 typed from the descriptor, both branch result types must agree, and generated
 code validates the result before evaluating exactly one branch.
 
+User-defined finite variants use
+`[:variant :qualified/type [[:case payload-type] ...]]`, with 1--32 unique
+cases inside the shared depth-8/node-64 type budget. Canonical host values are
+frozen `[descriptor, ":case", payload]` arrays. The full descriptor is part of
+the value identity and is structurally revalidated, preventing a same-named
+case from another schema or module from being substituted. `variant-match`
+must list every declared case exactly once and in declaration order; there is
+no wildcard that can silently absorb later schema expansion.
+
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
 as signed i64 at every exported boundary. `vector-get` has a lazy explicit

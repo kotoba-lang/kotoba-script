@@ -15,6 +15,7 @@
 (def ^:private max-vector-items 128)
 (def ^:private max-type-depth 8)
 (def ^:private max-type-nodes 64)
+(def ^:private max-variant-cases 32)
 
 (declare fail!)
 
@@ -32,10 +33,27 @@
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
+     (and (vector? type) (= 3 (count type)) (= :variant (first type)))
+     (let [[_ type-id cases] type]
+       (when-not (and (keyword? type-id) (namespace type-id))
+         (fail! "variant type id must be a qualified keyword" {:type type}))
+       (when-not (and (vector? cases) (seq cases) (<= (count cases) max-variant-cases)
+                      (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) cases)
+                      (= (count cases) (count (distinct (map first cases)))))
+         (fail! "variant cases must be a non-empty unique bounded vector" {:type type}))
+       (vswap! nodes + (+ 2 (* 2 (count cases))))
+       (when (> @nodes max-type-nodes)
+         (fail! "KIR value type exceeds node limit" {:limit max-type-nodes}))
+       (doseq [[_ payload-type] cases]
+         (validate-value-type! payload-type (inc depth) nodes))
+       type)
      :else (fail! "KIR value type is outside the safe profile" {:type type}))))
 
 (defn- parametric-result-type? [type]
   (and (vector? type) (= 3 (count type)) (= :result (first type))))
+
+(defn- variant-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :variant (first type))))
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -68,18 +86,25 @@
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
 
-(declare validate-value-type! parametric-result-type?)
+(declare validate-value-type! parametric-result-type? variant-type?)
 
 (defn- type-js [type]
   (validate-value-type! type)
-  (if (keyword? type)
-    (pr-str (name type))
+  (cond
+    (keyword? type) (pr-str (name type))
+    (parametric-result-type? type)
     (str "Object.freeze(['result'," (type-js (second type)) ","
-         (type-js (nth type 2)) "])")))
+         (type-js (nth type 2)) "])" )
+    :else
+    (str "Object.freeze(['variant'," (pr-str (str (second type))) ",Object.freeze(["
+         (str/join "," (map (fn [[tag payload-type]]
+                              (str "Object.freeze([" (pr-str (str tag)) ","
+                                   (type-js payload-type) "] )"))
+                            (nth type 2))) "])])")))
 
 (defn- guard-expr [type expression]
-  (if (parametric-result-type? type)
-    (str "assertParametricResult(" (type-js type) "," expression ")")
+  (if (or (parametric-result-type? type) (variant-type? type))
+    (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
            :string "assertString("
            :keyword "assertKeyword("
@@ -403,6 +428,41 @@
               (fail! "result match branches have different types"
                      {:ok ok-type :err err-type :node form}))
             ok-type))
+        variant-new
+        (let [[type tag payload] args
+              cases (when (variant-type? type) (nth type 2))
+              payload-type (some (fn [[case-tag case-type]]
+                                   (when (= case-tag tag) case-type)) cases)]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (variant-type? type)
+            (fail! "variant constructor requires a variant descriptor" {:type type}))
+          (when-not payload-type
+            (fail! "variant constructor tag is not declared" {:tag tag :type type}))
+          (require-type! (infer-type payload env signatures) payload-type payload)
+          type)
+        variant-match
+        (let [[type value branches] args
+              cases (when (variant-type? type) (nth type 2))]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (variant-type? type)
+            (fail! "variant match requires a variant descriptor" {:type type}))
+          (when-not (and (vector? branches)
+                         (= (mapv first cases) (mapv first branches))
+                         (every? #(and (vector? %) (= 3 (count %))
+                                       (symbol? (second %)) (nil? (namespace (second %))))
+                                 branches))
+            (fail! "variant match branches must exactly cover declared cases in order"
+                   {:type type :branches branches}))
+          (require-type! (infer-type value env signatures) type value)
+          (let [branch-types
+                (mapv (fn [[[tag payload-type] [_ binder body]]]
+                        (infer-type body (assoc env binder payload-type) signatures))
+                      (map vector cases branches))]
+            (when-not (apply = branch-types)
+              (fail! "variant match branches have different types" {:types branch-types}))
+            (first branch-types)))
         (infer-call-type op args env signatures)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -470,6 +530,16 @@
         (str "parametricResultMatch(" (type-js type) "," (a result) ","
              "(" (js-name ok-name) ")=>" (emit-expr ok-body (assoc env ok-name (js-name ok-name)) functions) ","
              "(" (js-name err-name) ")=>" (emit-expr err-body (assoc env err-name (js-name err-name)) functions) ")"))
+      (= op 'variant-new)
+      (let [[type tag payload] args]
+        (str "makeVariant(" (type-js type) "," (pr-str (str tag)) "," (a payload) ")"))
+      (= op 'variant-match)
+      (let [[type value branches] args]
+        (str "matchVariant(" (type-js type) "," (a value) ",Object.freeze(["
+             (str/join "," (map (fn [[tag binder body]]
+                                  (str "Object.freeze([" (pr-str (str tag)) ",(" (js-name binder)
+                                       ")=>" (emit-expr body (assoc env binder (js-name binder)) functions) "])"))
+                                branches)) "]))"))
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
@@ -674,7 +744,7 @@
                     ",booleanProfile:'strict-v1',optionProfile:'tagged-i64-v1'"
                     ",resultProfile:'tagged-i64-i64-v1'"
                     ",parametricAdtLimits:Object.freeze({depth:" max-type-depth
-                    ",nodes:" max-type-nodes "})"))
+                    ",nodes:" max-type-nodes ",variantCases:" max-variant-cases "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -703,6 +773,7 @@
              "throw new Error('invalid-result-i64');return v[0]?resultOk(v[1]):resultErr(v[1]);};"
              "const resultValue=(v,fallback)=>{v=assertResultI64(v);return v[0]?v[1]:assertI64(fallback());};"
              "const resultError=(v,fallback)=>{v=assertResultI64(v);return v[0]?assertI64(fallback()):v[1];};"
+             "const sameType=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((x,i)=>sameType(x,b[i])));"
              "const assertTypedValue=(t,v,d,s)=>{if(++s.nodes>" max-type-nodes
              ")throw new Error('adt-node-limit');if(d>" max-type-depth
              ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);"
@@ -710,9 +781,14 @@
              "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
              "if(t==='vector-i64')return assertVectorI64(v);"
-             "if(!Array.isArray(t)||t.length!==3||t[0]!=='result'||!Array.isArray(v)||v.length!==2||typeof v[0]!=='boolean')"
-             "throw new Error('invalid-parametric-result');const p=v[0]?t[1]:t[2];"
-             "return Object.freeze([v[0],assertTypedValue(p,v[1],d+1,s)]);};"
+             "if(Array.isArray(t)&&t.length===3&&t[0]==='result'){"
+             "if(!Array.isArray(v)||v.length!==2||typeof v[0]!=='boolean')throw new Error('invalid-parametric-result');"
+             "const p=v[0]?t[1]:t[2];return Object.freeze([v[0],assertTypedValue(p,v[1],d+1,s)]);}"
+             "if(Array.isArray(t)&&t.length===3&&t[0]==='variant'){"
+             "if(!Array.isArray(v)||v.length!==3||!sameType(v[0],t)||typeof v[1]!=='string')throw new Error('invalid-variant');"
+             "const c=t[2].find(c=>c[0]===v[1]);if(!c)throw new Error('unknown-variant-case');"
+             "return Object.freeze([t,v[1],assertTypedValue(c[1],v[2],d+1,s)]);}"
+             "throw new Error('invalid-type-descriptor');};"
              "const assertParametricResult=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
              "const makeParametricResult=(t,tag,payload)=>assertParametricResult(t,[tag,payload]);"
              "const parametricResultValue=(t,v,fallback)=>{v=assertParametricResult(t,v);"
@@ -721,6 +797,9 @@
              "return v[0]?assertTypedValue(t[2],fallback(),1,{nodes:0}):v[1];};"
              "const parametricResultMatch=(t,v,ok,err)=>{v=assertParametricResult(t,v);"
              "return v[0]?ok(v[1]):err(v[1]);};"
+             "const makeVariant=(t,tag,payload)=>assertTypedValue(t,[t,tag,payload],0,{nodes:0});"
+             "const matchVariant=(t,v,branches)=>{v=assertTypedValue(t,v,0,{nodes:0});"
+             "const b=branches.find(b=>b[0]===v[1]);if(!b)throw new Error('unknown-variant-case');return b[1](v[2]);};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"
