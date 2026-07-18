@@ -35,4 +35,10 @@ JavaScript `null`, `undefined`, integer sentinels, malformed tags, and payloads
 outside signed i64 fail closed. `option-value` evaluates its fallback only for
 none.
 
+The first sequential collection profile is `vector<i64>`, bounded to 128
+items. Its host ABI is a frozen JavaScript array whose elements are revalidated
+as signed i64 at every exported boundary. `vector-get` has a lazy explicit
+fallback; `vector-assoc` only replaces an existing index; `vector-conj` fails
+at capacity. Both updates return new frozen arrays and never mutate the input.
+
 Run tests with `clojure -M:test`.
