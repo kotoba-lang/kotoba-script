@@ -67,7 +67,7 @@
 (deftest equality-is-comparison-and-grants-are-exact
   (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main :effects #{}
                              :functions [{:name 'main :params [] :body '(= 1 2)}]})]
-    (is (re-find #"1n === 2n" source))
+    (is (re-find #"valueEqual\(1n,2n\)" source))
     (is (not (re-find #"1n = 2n" source)))
     (is (re-find #"capability-grant-mismatch" source))))
 
@@ -189,6 +189,45 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "mapLimits:Object.freeze({entries:128})"))
     (is (str/includes? source "const makeMap="))))
+
+(deftest typed-booleans-and-options-never-use-js-truthiness-or-null-sentinels
+  (let [typed-kir
+        {:format :kotoba.kir/v4 :entry nil
+         :exports ['negate 'present? 'with-default 'same-option?]
+         :effects #{}
+         :functions
+         [{:name 'negate :params ['value] :param-types [:bool]
+           :result :bool :effects #{} :body '(bool-not value)}
+          {:name 'present? :params ['value] :param-types [:option-i64]
+           :result :bool :effects #{} :body '(option-some? value)}
+          {:name 'with-default :params ['value] :param-types [:option-i64]
+           :result :i64 :effects #{} :body '(option-value value 9)}
+          {:name 'same-option? :params ['left 'right]
+           :param-types [:option-i64 :option-i64]
+           :result :i64 :effects #{} :body '(= left right)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "const none=Object.freeze([false]);const some=Object.freeze([true,7n]);"
+                "if(x.negate(true)!==false||x['present?'](none)!==false||x['present?'](some)!==true)process.exit(2);"
+                "if(x['with-default'](none)!==9n||x['with-default'](some)!==7n)process.exit(3);"
+                "if(x['same-option?'](none,[false])!==1n||x['same-option?'](some,[true,7n])!==1n)process.exit(4);"
+                "for(const bad of [null,undefined,0n,[false,1n],[true]]){try{x['present?'](bad);process.exit(5)}"
+                "catch(e){if(e.message!=='invalid-option-i64')process.exit(6)}}"
+                "try{x.negate(0n);process.exit(7)}catch(e){if(e.message!=='invalid-bool')process.exit(8)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const optionNone=Object.freeze([false])"))
+    (is (str/includes? source "booleanProfile:'strict-v1'"))
+    (is (str/includes? source "optionProfile:'tagged-i64-v1'"))
+    (is (not (str/includes? source "undefined?"))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"different types"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                          :functions [{:name 'bad :params [] :param-types []
+                                       :result :i64 :effects #{}
+                                       :body '(= (option-none) false)}]}))))
 
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))

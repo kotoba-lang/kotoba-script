@@ -7,7 +7,7 @@
 
 (def artifact-schema "kotoba-js-artifact/v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :string :keyword :map})
+(def ^:private value-types #{:i64 :string :keyword :map :bool :option-i64})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
@@ -119,8 +119,32 @@
       (do (require-arity! op args 2)
           (when-not (= (first types) (second types))
             (fail! "KIR equality operands have different types" {:types types :node args}))
-          (when-not (contains? #{:i64 :keyword} (first types))
+          (when-not (contains? #{:i64 :keyword :bool :option-i64} (first types))
             (fail! "KIR equality type is unsupported" {:type (first types)}))
+          :i64)
+
+      (= op 'bool-not)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :bool (first args))
+          :bool)
+
+      (= op 'option-some)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :i64 (first args))
+          :option-i64)
+
+      (= op 'option-none)
+      (do (require-arity! op args 0) :option-i64)
+
+      (= op 'option-some?)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :option-i64 (first args))
+          :bool)
+
+      (= op 'option-value)
+      (do (require-arity! op args 2)
+          (require-type! (first types) :option-i64 (first args))
+          (require-type! (second types) :i64 (second args))
           :i64)
 
       (contains? '#{< > <= >=} op)
@@ -193,6 +217,8 @@
           :string)
 
     (keyword? form) (do (keyword-text form) :keyword)
+    (boolean? form) :bool
+    (nil? form) :option-i64
     (symbol? form) (or (get env form)
                        (fail! "unbound KIR symbol" {:symbol form}))
     (seq? form)
@@ -210,7 +236,9 @@
                  test-type (infer-type test env signatures)
                  then-type (infer-type then env signatures)
                  else-type (infer-type else env signatures)]
-             (require-type! test-type :i64 test)
+             (when-not (contains? #{:i64 :bool} test-type)
+               (fail! "KIR if test must be bool or legacy i64"
+                      {:actual test-type :node test}))
              (when-not (= then-type else-type)
                (fail! "KIR if branches have different types"
                       {:then then-type :else else-type :node form}))
@@ -255,9 +283,15 @@
       (= op 'quot) (str "quot(" (a (first args)) "," (a (second args)) ")")
       (= op 'bit-xor) (str "i64(" (str/join " ^ " (map a args)) ")")
       (= op 'bit-and) (str "i64(" (str/join " & " (map a args)) ")")
-      (contains? '#{= < > <= >=} op)
-      (let [js-op (case op = "===" < "<" > ">" <= "<=" >= ">=")]
+      (= op '=) (str "(valueEqual(" (a (first args)) "," (a (second args)) ")?1n:0n)")
+      (contains? '#{< > <= >=} op)
+      (let [js-op (case op < "<" > ">" <= "<=" >= ">=")]
         (str "((" (str/join (str " " js-op " ") (map a args)) ")?1n:0n)"))
+      (= op 'bool-not) (str "(!" (a (first args)) ")")
+      (= op 'option-some) (str "optionSome(" (a (first args)) ")")
+      (= op 'option-none) "optionNone"
+      (= op 'option-some?) (str "assertOptionI64(" (a (first args)) ")[0]")
+      (= op 'option-value) (str "optionValue(" (a (first args)) ",()=>" (a (second args)) ")")
       (= op 'pair) (str "Object.freeze([" (a (first args)) "," (a (second args)) "])")
       (= op 'pair-first) (str (a (first args)) "[0]")
       (= op 'pair-second) (str (a (first args)) "[1]")
@@ -284,6 +318,8 @@
     (integer? form) (bigint-literal form)
     (string? form) (js-string form)
     (keyword? form) (js-string (keyword-text form))
+    (boolean? form) (if form "true" "false")
+    (nil? form) "optionNone"
     (symbol? form) (or (get env form)
                        (fail! "unbound KIR symbol" {:symbol form}))
     (seq? form)
@@ -300,9 +336,10 @@
                   (str "(()=>{" (apply str bindings-js) "return "
                        (emit-expr body env functions) ";})()"))))
         if (let [[test then else] args]
-             (str "((" (emit-expr test env functions) ")===0n?"
-                  (emit-expr else env functions) ":"
-                  (emit-expr then env functions) ")"))
+             (str "(()=>{const t=" (emit-expr test env functions)
+                  ";return (typeof t==='boolean'?t:t!==0n)?"
+                  (emit-expr then env functions) ":"
+                  (emit-expr else env functions) ";})()"))
         (emit-call op args env functions)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -433,6 +470,8 @@
                                                            :string "assertString("
                                                            :keyword "assertKeyword("
                                                            :map "assertMap("
+                                                           :bool "assertBool("
+                                                           :option-i64 "assertOptionI64("
                                                            "assertI64(")
                                                          (js-name param) ");"))
                                                   params param-types))]
@@ -442,6 +481,8 @@
                                   :string "assertString("
                                   :keyword "assertKeyword("
                                   :map "assertMap("
+                                  :bool "assertBool("
+                                  :option-i64 "assertOptionI64("
                                   "assertI64(")
                                 (emit-expr body env functions) ");}")))
                        (:functions kir)))
@@ -455,7 +496,8 @@
                     ",valueBytes:" max-string-value-bytes "})"
                     ",keywordLimits:Object.freeze({valueBytes:" max-keyword-bytes "})"))
              (when (= :kotoba.kir/v4 (:format kir))
-               (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"))
+               (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"
+                    ",booleanProfile:'strict-v1',optionProfile:'tagged-i64-v1'"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -470,6 +512,16 @@
              "throw new Error('capability-grant-mismatch');"
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
+             "const assertBool=v=>{if(typeof v!=='boolean')throw new Error('invalid-bool');return v;};"
+             "const optionNone=Object.freeze([false]);"
+             "const optionSome=v=>Object.freeze([true,assertI64(v)]);"
+             "const assertOptionI64=v=>{if(!Array.isArray(v)||(v.length!==1&&v.length!==2)||"
+             "typeof v[0]!=='boolean'||(v[0]&&v.length!==2)||(!v[0]&&v.length!==1))"
+             "throw new Error('invalid-option-i64');return v[0]?optionSome(v[1]):optionNone;};"
+             "const optionValue=(v,fallback)=>{v=assertOptionI64(v);return v[0]?v[1]:assertI64(fallback());};"
+             "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
+             "a=assertOptionI64(a);b=assertOptionI64(b);return a[0]===b[0]&&(!a[0]||a[1]===b[1]);}"
+             "return a===b;};"
              "const utf8Bytes=s=>{let n=0;for(let i=0;i<s.length;i++){const u=s.charCodeAt(i);"
              "if(u<=127)n++;else if(u<=2047)n+=2;else if(u>=55296&&u<=56319){"
              "if(i+1>=s.length)throw new Error('invalid-utf16');const l=s.charCodeAt(++i);"
