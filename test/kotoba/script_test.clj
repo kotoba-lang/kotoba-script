@@ -231,13 +231,18 @@
 
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil :exports ['count-items 'lookup 'update 'append 'same?]
+        {:format :kotoba.kir/v4 :entry nil
+         :exports ['count-items 'lookup 'require-item 'drop-items 'update 'append 'same?]
          :effects #{}
          :functions
          [{:name 'count-items :params ['value] :param-types [:vector-i64]
            :result :i64 :effects #{} :body '(vector-count value)}
           {:name 'lookup :params ['value 'index] :param-types [:vector-i64 :i64]
            :result :i64 :effects #{} :body '(vector-get value index 99)}
+          {:name 'require-item :params ['value 'index] :param-types [:vector-i64 :i64]
+           :result :i64 :effects #{} :body '(vector-at value index)}
+          {:name 'drop-items :params ['value 'count] :param-types [:vector-i64 :i64]
+           :result :vector-i64 :effects #{} :body '(vector-drop value count)}
           {:name 'update :params ['value 'index 'item]
            :param-types [:vector-i64 :i64 :i64] :result :vector-i64 :effects #{}
            :body '(vector-assoc value index item)}
@@ -251,6 +256,7 @@
                 "').then(m=>{const x=m.instantiateKotoba({});const before=[1n,2n];"
                 "const after=x.update(before,0n,7n);const appended=x.append(after,8n);"
                 "if(x['count-items'](before)!==2n||x.lookup(before,9n)!==99n||x.lookup(before,-1n)!==99n||x.lookup(before,9223372036854775807n)!==99n)process.exit(2);"
+                "if(x['require-item'](before,1n)!==2n||x['drop-items']([1n,2n,3n],1n).join(',')!=='2,3')process.exit(9);"
                 "if(before[0]!==1n||after[0]!==7n||appended.length!==3||!Object.isFrozen(appended))process.exit(3);"
                 "if(x['same?']([1n,2n],[1n,2n])!==1n||x['same?']([1n],[2n])!==0n)process.exit(8);"
                 "for(const bad of [null,[1],[1n,'x']]){try{x['count-items'](bad);process.exit(4)}"
@@ -260,6 +266,16 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "vectorLimits:Object.freeze({items:128})"))
     (is (str/includes? source "const makeVector=")))
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['at] :effects #{}
+             :functions [{:name 'at :params ['v] :param-types [:vector-i64]
+                          :result :i64 :effects #{} :body '(vector-at v 2)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh "node" "--input-type=module" "-e"
+                         (str "import('data:text/javascript;base64," encoded
+                              "').then(m=>{try{m.instantiateKotoba({}).at([1n]);process.exit(2)}"
+                              "catch(e){if(e.message!=='vector-index-out-of-range')process.exit(3)}})"))]
+    (is (zero? (:exit result)) (:err result)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"item limit"
                         (script/emit
                          {:format :kotoba.kir/v4 :entry nil :exports ['too-large] :effects #{}

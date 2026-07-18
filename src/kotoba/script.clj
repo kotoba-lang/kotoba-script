@@ -165,6 +165,16 @@
           (require-type! (nth types 1) :i64 (nth args 1))
           (require-type! (nth types 2) :i64 (nth args 2)) :i64)
 
+      (= op 'vector-at)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :i64)
+
+      (= op 'vector-drop)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
+
       (= op 'vector-assoc)
       (do (require-arity! op args 3)
           (require-type! (nth types 0) :vector-i64 (nth args 0))
@@ -325,6 +335,8 @@
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
                               (a (nth args 2)) ")")
+      (= op 'vector-at) (str "vectorAt(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'vector-drop) (str "vectorDrop(" (a (nth args 0)) "," (a (nth args 1)) ")")
       (= op 'vector-assoc) (str "vectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) ","
                                 (a (nth args 2)) ")")
       (= op 'vector-conj) (str "vectorConj(" (a (nth args 0)) "," (a (nth args 1)) ")")
@@ -569,6 +581,10 @@
              "const assertVectorI64=v=>makeVector(v);"
              "const vectorGet=(v,i,fallback)=>{v=assertVectorI64(v);i=assertI64(i);"
              "return i>=0n&&i<BigInt(v.length)?v[Number(i)]:assertI64(fallback());};"
+             "const vectorAt=(v,i)=>{v=assertVectorI64(v);i=assertI64(i);"
+             "if(i<0n||i>=BigInt(v.length))throw new Error('vector-index-out-of-range');return v[Number(i)];};"
+             "const vectorDrop=(v,n)=>{v=assertVectorI64(v);n=assertI64(n);"
+             "if(n<0n||n>BigInt(v.length))throw new Error('vector-drop-out-of-range');return makeVector(v.slice(Number(n)));};"
              "const vectorAssoc=(v,i,item)=>{v=assertVectorI64(v);i=assertI64(i);"
              "if(i<0n||i>=BigInt(v.length))throw new Error('vector-index-out-of-range');"
              "const out=v.slice();out[Number(i)]=assertI64(item);return makeVector(out);};"
