@@ -21,6 +21,20 @@
     (is (= "42\n" (:out result)))
     (is (not (re-find #"globalThis|window|document|eval" source)))))
 
+(deftest floating-point-is-explicitly-forbidden-and-artifact-sealed
+  (let [source (script/emit kir)]
+    (is (= "forbidden-v1" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'forbidden-v1'")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unsupported KIR node"
+                        (script/emit
+                         {:format :kotoba.kir/v3 :entry 'main :effects #{}
+                          :functions [{:name 'main :params [] :body 1.5}]})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"outside the safe profile"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry nil :exports ['identity] :effects #{}
+                          :functions [{:name 'identity :params ['x] :param-types [:f64]
+                                       :result :f64 :effects #{} :body 'x}]}))))
+
 (deftest capabilities-fail-closed
   (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main
                              :effects #{[:cap/call 7]}

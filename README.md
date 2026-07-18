@@ -13,6 +13,14 @@ Generated modules expose `kotobaArtifact` and `instantiateKotoba(grants)`.
 They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.
 
+Every emitted artifact declares `floatingPointPolicy: 'forbidden-v1'`.
+Floating-point literals, descriptors, parameters, results, operations, and
+runtime boundary values are outside the admitted value domain. This prevents
+JavaScript `number`, NaN, infinities, signed zero, implicit rounding, and
+integer-to-double coercion from becoming accidental Kotoba semantics. A future
+floating-point profile requires a new versioned ABI and explicit rules for all
+of those cases; it cannot silently widen this policy.
+
 KIR v4 preserves `:i64`, `:string`, `:keyword`, `:bool`, `:option-i64`, and the
 first bounded `:map` profile as distinct value types. String
 literals must be well-formed UTF-16, are capped at 4,096 UTF-8 bytes each and

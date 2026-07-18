@@ -6,6 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
+(def floating-point-policy "forbidden-v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
@@ -1051,6 +1052,7 @@
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
              "',kirFormat:'" (name (:format kir)) "',entry:" (js-string (some-> entry str))
              ",valueProfile:'" (if (= :kotoba.kir/v4 (:format kir)) "typed-v1" "i64-v1") "'"
+             ",floatingPointPolicy:'" floating-point-policy "'"
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",stringLimits:Object.freeze({literalBytes:" max-string-literal-bytes
                     ",moduleLiteralBytes:" max-string-value-bytes
