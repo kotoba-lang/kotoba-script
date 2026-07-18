@@ -426,6 +426,58 @@
                                        :result [:vector (vec (repeat 33 :i64))]
                                        :effects #{} :body 0}]}))))
 
+(deftest typed-sets-have-canonical-order-unique-items-and-persistent-updates
+  (let [type [:set :i64]
+        option-type [:option :string]
+        nested-type [:set [:option :string]]
+        kir {:format :kotoba.kir/v4 :entry nil
+             :exports ['make 'nested 'duplicate 'contains? 'add 'remove 'same?] :effects #{}
+             :functions
+             [{:name 'make :params [] :param-types [] :result type :effects #{}
+               :body (list 'typed-set-new type 3 1 2)}
+              {:name 'nested :params [] :param-types [] :result nested-type :effects #{}
+               :body (list 'typed-set-new nested-type
+                           (list 'option-some-of option-type "b")
+                           (list 'option-none-of option-type)
+                           (list 'option-some-of option-type "a"))}
+              {:name 'duplicate :params [] :param-types [] :result type :effects #{}
+               :body (list 'typed-set-new type 1 1)}
+              {:name 'contains? :params ['value 'item] :param-types [type :i64]
+               :result :bool :effects #{}
+               :body (list 'typed-set-contains type 'value 'item)}
+              {:name 'add :params ['value 'item] :param-types [type :i64]
+               :result type :effects #{}
+               :body (list 'typed-set-conj type 'value 'item)}
+              {:name 'remove :params ['value 'item] :param-types [type :i64]
+               :result type :effects #{}
+               :body (list 'typed-set-disj type 'value 'item)}
+              {:name 'same? :params ['left 'right] :param-types [type type]
+               :result :i64 :effects #{}
+               :body (list 'typed-set-equal type 'left 'right)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),t=Object.freeze(['set','i64']);"
+                "const a=x.make(),b=x.add(a,4n),c=x.remove(b,2n);"
+                "if(a[1].join(',')!=='1,2,3'||!x['contains?'](a,2n)||x['contains?'](a,9n))process.exit(2);"
+                "if(a[1].length!==3||b[1].join(',')!=='1,2,3,4'||c[1].join(',')!=='1,3,4'||!Object.isFrozen(c[1]))process.exit(3);"
+                "if(x['same?'](a,[t,[3n,2n,1n]])!==1n||x['same?'](a,b)!==0n)process.exit(4);"
+                "const n=x.nested();if(n[1].length!==3||n[1][0][1]!==false||n[1][1][2]!=='a'||n[1][2][2]!=='b')process.exit(9);"
+                "try{x.duplicate();process.exit(5)}catch(e){if(e.message!=='duplicate-set-item')process.exit(6)}"
+                "try{x['contains?']([Object.freeze(['set','string']),['1']],1n);process.exit(7)}"
+                "catch(e){if(e.message!=='invalid-typed-set')process.exit(8)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "typedSetLimits:Object.freeze({items:32})"))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"item limit"
+                          (script/emit
+                           (assoc-in kir [:functions 0 :body]
+                                     (list* 'typed-set-new type (range 33))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"expression type mismatch"
+                          (script/emit
+                           (assoc-in kir [:functions 0 :body]
+                                     (list 'typed-set-new type "wrong")))))))
+
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil
