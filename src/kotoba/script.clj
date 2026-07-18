@@ -33,6 +33,9 @@
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
+     (and (vector? type) (= 2 (count type)) (= :option (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -54,6 +57,9 @@
 
 (defn- variant-type? [type]
   (and (vector? type) (= 3 (count type)) (= :variant (first type))))
+
+(defn- generic-option-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :option (first type))))
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -86,7 +92,7 @@
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
 
-(declare validate-value-type! parametric-result-type? variant-type?)
+(declare validate-value-type! parametric-result-type? variant-type? generic-option-type?)
 
 (defn- type-js [type]
   (validate-value-type! type)
@@ -95,6 +101,8 @@
     (parametric-result-type? type)
     (str "Object.freeze(['result'," (type-js (second type)) ","
          (type-js (nth type 2)) "])" )
+    (generic-option-type? type)
+    (str "Object.freeze(['option'," (type-js (second type)) "])" )
     :else
     (str "Object.freeze(['variant'," (pr-str (str (second type))) ",Object.freeze(["
          (str/join "," (map (fn [[tag payload-type]]
@@ -103,7 +111,7 @@
                             (nth type 2))) "])])")))
 
 (defn- guard-expr [type expression]
-  (if (or (parametric-result-type? type) (variant-type? type))
+  (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
            :string "assertString("
@@ -463,6 +471,52 @@
             (when-not (apply = branch-types)
               (fail! "variant match branches have different types" {:types branch-types}))
             (first branch-types)))
+        option-some-of
+        (let [[type payload] args]
+          (require-arity! op args 2)
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (fail! "generic option constructor requires [:option payload-type]" {:type type}))
+          (require-type! (infer-type payload env signatures) (second type) payload)
+          type)
+        option-none-of
+        (let [[type] args]
+          (require-arity! op args 1)
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (fail! "generic option constructor requires [:option payload-type]" {:type type}))
+          type)
+        option-some?-of
+        (let [[type value] args]
+          (require-arity! op args 2)
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (fail! "generic option projection requires [:option payload-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          :bool)
+        option-value-of
+        (let [[type value fallback] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (generic-option-type? type)
+            (fail! "generic option projection requires [:option payload-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type fallback env signatures) (second type) fallback)
+          (second type))
+        option-match
+        (let [[type value none-body some-name some-body] args]
+          (require-arity! op args 5)
+          (validate-value-type! type)
+          (when-not (and (generic-option-type? type) (symbol? some-name)
+                         (nil? (namespace some-name)))
+            (fail! "option match requires option type and unqualified some binder" {:node form}))
+          (require-type! (infer-type value env signatures) type value)
+          (let [none-type (infer-type none-body env signatures)
+                some-type (infer-type some-body (assoc env some-name (second type)) signatures)]
+            (when-not (= none-type some-type)
+              (fail! "option match branches have different types"
+                     {:none none-type :some some-type :node form}))
+            none-type))
         (infer-call-type op args env signatures)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -540,6 +594,20 @@
                                   (str "Object.freeze([" (pr-str (str tag)) ",(" (js-name binder)
                                        ")=>" (emit-expr body (assoc env binder (js-name binder)) functions) "])"))
                                 branches)) "]))"))
+      (= op 'option-some-of)
+      (str "makeGenericOption(" (type-js (first args)) ",true," (a (second args)) ")")
+      (= op 'option-none-of)
+      (str "makeGenericOption(" (type-js (first args)) ",false,null)")
+      (= op 'option-some?-of)
+      (str "assertGenericOption(" (type-js (first args)) "," (a (second args)) ")[1]")
+      (= op 'option-value-of)
+      (str "genericOptionValue(" (type-js (first args)) "," (a (second args)) ",()=>"
+           (a (nth args 2)) ")")
+      (= op 'option-match)
+      (let [[type value none-body some-name some-body] args]
+        (str "matchGenericOption(" (type-js type) "," (a value) ",()=>" (a none-body) ","
+             "(" (js-name some-name) ")=>"
+             (emit-expr some-body (assoc env some-name (js-name some-name)) functions) ")"))
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
@@ -742,6 +810,7 @@
                (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"
                     ",vectorLimits:Object.freeze({items:" max-vector-items "})"
                     ",booleanProfile:'strict-v1',optionProfile:'tagged-i64-v1'"
+                    ",genericOptionProfile:'typed-tagged-v1'"
                     ",resultProfile:'tagged-i64-i64-v1'"
                     ",parametricAdtLimits:Object.freeze({depth:" max-type-depth
                     ",nodes:" max-type-nodes ",variantCases:" max-variant-cases "})"))
@@ -781,6 +850,10 @@
              "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
              "if(t==='vector-i64')return assertVectorI64(v);"
+             "if(Array.isArray(t)&&t.length===2&&t[0]==='option'){"
+             "if(!Array.isArray(v)||!sameType(v[0],t)||typeof v[1]!=='boolean'||"
+             "(v[1]&&v.length!==3)||(!v[1]&&v.length!==2))throw new Error('invalid-generic-option');"
+             "return v[1]?Object.freeze([t,true,assertTypedValue(t[1],v[2],d+1,s)]):Object.freeze([t,false]);}"
              "if(Array.isArray(t)&&t.length===3&&t[0]==='result'){"
              "if(!Array.isArray(v)||v.length!==2||typeof v[0]!=='boolean')throw new Error('invalid-parametric-result');"
              "const p=v[0]?t[1]:t[2];return Object.freeze([v[0],assertTypedValue(p,v[1],d+1,s)]);}"
@@ -800,6 +873,11 @@
              "const makeVariant=(t,tag,payload)=>assertTypedValue(t,[t,tag,payload],0,{nodes:0});"
              "const matchVariant=(t,v,branches)=>{v=assertTypedValue(t,v,0,{nodes:0});"
              "const b=branches.find(b=>b[0]===v[1]);if(!b)throw new Error('unknown-variant-case');return b[1](v[2]);};"
+             "const assertGenericOption=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const makeGenericOption=(t,some,payload)=>assertGenericOption(t,some?[t,true,payload]:[t,false]);"
+             "const genericOptionValue=(t,v,fallback)=>{v=assertGenericOption(t,v);"
+             "return v[1]?v[2]:assertTypedValue(t[1],fallback(),1,{nodes:0});};"
+             "const matchGenericOption=(t,v,none,some)=>{v=assertGenericOption(t,v);return v[1]?some(v[2]):none();};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"
