@@ -7,11 +7,12 @@
 
 (def artifact-schema "kotoba-js-artifact/v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :string :keyword :map :bool :option-i64})
+(def ^:private value-types #{:i64 :string :keyword :map :bool :option-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
 (def ^:private max-map-entries 128)
+(def ^:private max-vector-items 128)
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -146,6 +147,34 @@
           (require-type! (first types) :option-i64 (first args))
           (require-type! (second types) :i64 (second args))
           :i64)
+
+      (= op 'vector-new)
+      (do (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg))
+          (when (> (count args) max-vector-items)
+            (fail! "KIR vector literal exceeds item limit"
+                   {:items (count args) :limit max-vector-items}))
+          :vector-i64)
+
+      (= op 'vector-count)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :vector-i64 (first args)) :i64)
+
+      (= op 'vector-get)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2)) :i64)
+
+      (= op 'vector-assoc)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2)) :vector-i64)
+
+      (= op 'vector-conj)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
 
       (contains? '#{< > <= >=} op)
       (do (require-arity! op args 2)
@@ -292,6 +321,13 @@
       (= op 'option-none) "optionNone"
       (= op 'option-some?) (str "assertOptionI64(" (a (first args)) ")[0]")
       (= op 'option-value) (str "optionValue(" (a (first args)) ",()=>" (a (second args)) ")")
+      (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
+      (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
+      (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
+                              (a (nth args 2)) ")")
+      (= op 'vector-assoc) (str "vectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) ","
+                                (a (nth args 2)) ")")
+      (= op 'vector-conj) (str "vectorConj(" (a (nth args 0)) "," (a (nth args 1)) ")")
       (= op 'pair) (str "Object.freeze([" (a (first args)) "," (a (second args)) "])")
       (= op 'pair-first) (str (a (first args)) "[0]")
       (= op 'pair-second) (str (a (first args)) "[1]")
@@ -472,6 +508,7 @@
                                                            :map "assertMap("
                                                            :bool "assertBool("
                                                            :option-i64 "assertOptionI64("
+                                                           :vector-i64 "assertVectorI64("
                                                            "assertI64(")
                                                          (js-name param) ");"))
                                                   params param-types))]
@@ -483,6 +520,7 @@
                                   :map "assertMap("
                                   :bool "assertBool("
                                   :option-i64 "assertOptionI64("
+                                  :vector-i64 "assertVectorI64("
                                   "assertI64(")
                                 (emit-expr body env functions) ");}")))
                        (:functions kir)))
@@ -497,6 +535,7 @@
                     ",keywordLimits:Object.freeze({valueBytes:" max-keyword-bytes "})"))
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"
+                    ",vectorLimits:Object.freeze({items:" max-vector-items "})"
                     ",booleanProfile:'strict-v1',optionProfile:'tagged-i64-v1'"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
@@ -522,6 +561,17 @@
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "a=assertOptionI64(a);b=assertOptionI64(b);return a[0]===b[0]&&(!a[0]||a[1]===b[1]);}"
              "return a===b;};"
+             "const makeVector=items=>{if(!Array.isArray(items))throw new Error('invalid-vector-i64');"
+             "if(items.length>" max-vector-items ")throw new Error('vector-too-large');"
+             "return Object.freeze(items.map(assertI64));};"
+             "const assertVectorI64=v=>makeVector(v);"
+             "const vectorIndex=i=>{i=assertI64(i);if(i<0n||i>127n)throw new Error('vector-index-out-of-range');return Number(i);};"
+             "const vectorGet=(v,i,fallback)=>{v=assertVectorI64(v);i=vectorIndex(i);"
+             "return i<v.length?v[i]:assertI64(fallback());};"
+             "const vectorAssoc=(v,i,item)=>{v=assertVectorI64(v);i=vectorIndex(i);"
+             "if(i>=v.length)throw new Error('vector-index-out-of-range');const out=v.slice();out[i]=assertI64(item);return makeVector(out);};"
+             "const vectorConj=(v,item)=>{v=assertVectorI64(v);if(v.length>=" max-vector-items
+             ")throw new Error('vector-too-large');return makeVector([...v,assertI64(item)]);};"
              "const utf8Bytes=s=>{let n=0;for(let i=0;i<s.length;i++){const u=s.charCodeAt(i);"
              "if(u<=127)n++;else if(u<=2047)n+=2;else if(u>=55296&&u<=56319){"
              "if(i+1>=s.length)throw new Error('invalid-utf16');const l=s.charCodeAt(++i);"
