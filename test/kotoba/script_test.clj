@@ -356,6 +356,32 @@
                                        :result [:variant :status [[:ready :i64]]]
                                        :effects #{} :body 0}]}))))
 
+(deftest generic-options-preserve-none-type-identity-and-exhaustive-matching
+  (let [type [:option :string]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['some 'none 'describe] :effects #{}
+             :functions
+             [{:name 'some :params [] :param-types [] :result type :effects #{}
+               :body (list 'option-some-of type "安全")}
+              {:name 'none :params [] :param-types [] :result type :effects #{}
+               :body (list 'option-none-of type)}
+              {:name 'describe :params ['value] :param-types [type] :result :i64 :effects #{}
+               :body (list 'option-match type 'value 7 'text '(string-byte-length text))}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),t=Object.freeze(['option','string']);"
+                "const s=x.some(),n=x.none();if(s[1]!==true||s[2]!=='安全'||n[1]!==false)process.exit(2);"
+                "if(x.describe([t,true,'安全'])!==6n||x.describe([t,false])!==7n)process.exit(3);"
+                "try{x.describe([Object.freeze(['option','i64']),false]);process.exit(4)}"
+                "catch(e){if(e.message!=='invalid-generic-option')process.exit(5)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "genericOptionProfile:'typed-tagged-v1'"))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"different types"
+                          (script/emit
+                           (assoc-in kir [:functions 2 :body]
+                                     (list 'option-match type 'value 7 'text 'text)))))))
+
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil

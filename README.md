@@ -62,6 +62,13 @@ case from another schema or module from being substituted. `variant-match`
 must list every declared case exactly once and in declaration order; there is
 no wildcard that can silently absorb later schema expansion.
 
+Generic options use `[:option payload-type]`. Canonical host values are
+`[descriptor, false]` for none and `[descriptor, true, payload]` for some, so
+even payload-free none values retain exact type identity. Constructors,
+projection, and exhaustive none/some matching carry the descriptor explicitly;
+null, undefined, malformed tags, cross-option substitution, and eager fallback
+evaluation remain outside the language ABI.
+
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
 as signed i64 at every exported boundary. `vector-get` has a lazy explicit
