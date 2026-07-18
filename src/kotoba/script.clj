@@ -7,7 +7,7 @@
 
 (def artifact-schema "kotoba-js-artifact/v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :string :keyword :map :bool :option-i64 :vector-i64})
+(def ^:private value-types #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
@@ -120,7 +120,7 @@
       (do (require-arity! op args 2)
           (when-not (= (first types) (second types))
             (fail! "KIR equality operands have different types" {:types types :node args}))
-          (when-not (contains? #{:i64 :keyword :bool :option-i64 :vector-i64} (first types))
+          (when-not (contains? #{:i64 :keyword :bool :option-i64 :result-i64 :vector-i64} (first types))
             (fail! "KIR equality type is unsupported" {:type (first types)}))
           :i64)
 
@@ -145,6 +145,22 @@
       (= op 'option-value)
       (do (require-arity! op args 2)
           (require-type! (first types) :option-i64 (first args))
+          (require-type! (second types) :i64 (second args))
+          :i64)
+
+      (contains? '#{result-ok result-err} op)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :i64 (first args))
+          :result-i64)
+
+      (= op 'result-ok?)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :result-i64 (first args))
+          :bool)
+
+      (contains? '#{result-value result-error} op)
+      (do (require-arity! op args 2)
+          (require-type! (first types) :result-i64 (first args))
           (require-type! (second types) :i64 (second args))
           :i64)
 
@@ -331,6 +347,11 @@
       (= op 'option-none) "optionNone"
       (= op 'option-some?) (str "assertOptionI64(" (a (first args)) ")[0]")
       (= op 'option-value) (str "optionValue(" (a (first args)) ",()=>" (a (second args)) ")")
+      (= op 'result-ok) (str "resultOk(" (a (first args)) ")")
+      (= op 'result-err) (str "resultErr(" (a (first args)) ")")
+      (= op 'result-ok?) (str "assertResultI64(" (a (first args)) ")[0]")
+      (= op 'result-value) (str "resultValue(" (a (first args)) ",()=>" (a (second args)) ")")
+      (= op 'result-error) (str "resultError(" (a (first args)) ",()=>" (a (second args)) ")")
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
@@ -520,6 +541,7 @@
                                                            :map "assertMap("
                                                            :bool "assertBool("
                                                            :option-i64 "assertOptionI64("
+                                                           :result-i64 "assertResultI64("
                                                            :vector-i64 "assertVectorI64("
                                                            "assertI64(")
                                                          (js-name param) ");"))
@@ -532,6 +554,7 @@
                                   :map "assertMap("
                                   :bool "assertBool("
                                   :option-i64 "assertOptionI64("
+                                  :result-i64 "assertResultI64("
                                   :vector-i64 "assertVectorI64("
                                   "assertI64(")
                                 (emit-expr body env functions) ");}")))
@@ -548,7 +571,8 @@
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"
                     ",vectorLimits:Object.freeze({items:" max-vector-items "})"
-                    ",booleanProfile:'strict-v1',optionProfile:'tagged-i64-v1'"))
+                    ",booleanProfile:'strict-v1',optionProfile:'tagged-i64-v1'"
+                    ",resultProfile:'tagged-i64-i64-v1'"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -570,8 +594,17 @@
              "typeof v[0]!=='boolean'||(v[0]&&v.length!==2)||(!v[0]&&v.length!==1))"
              "throw new Error('invalid-option-i64');return v[0]?optionSome(v[1]):optionNone;};"
              "const optionValue=(v,fallback)=>{v=assertOptionI64(v);return v[0]?v[1]:assertI64(fallback());};"
+             "const resultOk=v=>Object.freeze([true,assertI64(v)]);"
+             "const resultErr=e=>Object.freeze([false,assertI64(e)]);"
+             "const assertResultI64=v=>{if(!Array.isArray(v)||v.length!==2||typeof v[0]!=='boolean'||"
+             "typeof v[1]!=='bigint'||i64(v[1])!==v[1])"
+             "throw new Error('invalid-result-i64');return v[0]?resultOk(v[1]):resultErr(v[1]);};"
+             "const resultValue=(v,fallback)=>{v=assertResultI64(v);return v[0]?v[1]:assertI64(fallback());};"
+             "const resultError=(v,fallback)=>{v=assertResultI64(v);return v[0]?assertI64(fallback()):v[1];};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
+             "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"
+             "a=assertResultI64(a);b=assertResultI64(b);return a[0]===b[0]&&a[1]===b[1];}"
              "a=assertOptionI64(a);b=assertOptionI64(b);return a[0]===b[0]&&(!a[0]||a[1]===b[1]);}"
              "a=assertVectorI64(a);b=assertVectorI64(b);return a.length===b.length&&a.every((v,i)=>v===b[i]);}"
              "return a===b;};"

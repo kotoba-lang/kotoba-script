@@ -229,6 +229,35 @@
                                        :result :i64 :effects #{}
                                        :body '(= (option-none) false)}]}))))
 
+(deftest bounded-result-i64-has-closed-tags-payloads-and-lazy-fallbacks
+  (let [typed-kir
+        {:format :kotoba.kir/v4 :entry nil
+         :exports ['ok? 'value 'error 'same?]
+         :effects #{}
+         :functions
+         [{:name 'ok? :params ['result] :param-types [:result-i64]
+           :result :bool :effects #{} :body '(result-ok? result)}
+          {:name 'value :params ['result 'fallback] :param-types [:result-i64 :i64]
+           :result :i64 :effects #{} :body '(result-value result fallback)}
+          {:name 'error :params ['result 'fallback] :param-types [:result-i64 :i64]
+           :result :i64 :effects #{} :body '(result-error result fallback)}
+          {:name 'same? :params ['left 'right] :param-types [:result-i64 :result-i64]
+           :result :i64 :effects #{} :body '(= left right)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});const ok=[true,7n],err=[false,12n];"
+                "if(x['ok?'](ok)!==true||x['ok?'](err)!==false)process.exit(2);"
+                "if(x.value(ok,99n)!==7n||x.value(err,99n)!==99n)process.exit(3);"
+                "if(x.error(err,99n)!==12n||x.error(ok,99n)!==99n)process.exit(4);"
+                "if(x['same?'](ok,[true,7n])!==1n||x['same?'](err,[false,13n])!==0n)process.exit(5);"
+                "for(const bad of [null,undefined,[true],[false],['ok',1n],[true,1]]){try{x['ok?'](bad);process.exit(6)}"
+                "catch(e){if(e.message!=='invalid-result-i64')process.exit(7)}}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "resultProfile:'tagged-i64-i64-v1'"))
+    (is (str/includes? source "const assertResultI64="))))
+
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil

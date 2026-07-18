@@ -33,7 +33,12 @@ truthiness is not accepted. The first option profile is deliberately
 ABI is the frozen tagged array `[false]` for none or `[true, bigint]` for some.
 JavaScript `null`, `undefined`, integer sentinels, malformed tags, and payloads
 outside signed i64 fail closed. `option-value` evaluates its fallback only for
-none.
+none. The first algebraic-result profile is likewise deliberately closed:
+`result<i64,i64>` uses the frozen tagged array `[true, bigint]` for ok and
+`[false, bigint]` for err. Both payload positions are signed i64,
+malformed/missing payloads fail closed, and `result-value` / `result-error`
+evaluate their fallback only for the opposite variant. This is a monomorphic
+ABI foundation, not yet a claim of generic ADTs.
 
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
