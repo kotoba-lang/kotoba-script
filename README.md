@@ -69,6 +69,17 @@ projection, and exhaustive none/some matching carry the descriptor explicitly;
 null, undefined, malformed tags, cross-option substitution, and eager fallback
 evaluation remain outside the language ABI.
 
+Fixed heterogeneous vectors use `[:vector [item-type ...]]` with at most 32
+positions inside the shared depth-8/node-64 descriptor budget. Their canonical
+host value is `[descriptor, item ...]`: descriptor identity, exact length, and
+every position's declared type are revalidated at each export boundary.
+Construction must supply every position exactly once; projection and persistent
+replacement use an admission-time in-range integer index, so their result or
+replacement type is statically determined. Equality first validates both full
+values against the same descriptor and then compares every canonical nested
+value structurally; JavaScript object identity is never observed. Dynamic indexes, sparse values,
+append/drop operations, and host mutation are not admitted by this profile.
+
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
 as signed i64 at every exported boundary. `vector-get` has a lazy explicit

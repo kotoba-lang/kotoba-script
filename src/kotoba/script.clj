@@ -16,6 +16,7 @@
 (def ^:private max-type-depth 8)
 (def ^:private max-type-nodes 64)
 (def ^:private max-variant-cases 32)
+(def ^:private max-heterogeneous-vector-items 32)
 
 (declare fail!)
 
@@ -36,6 +37,18 @@
      (and (vector? type) (= 2 (count type)) (= :option (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
+     (and (vector? type) (= 2 (count type)) (= :vector (first type)))
+     (let [item-types (second type)]
+       (when-not (and (vector? item-types)
+                      (<= (count item-types) max-heterogeneous-vector-items))
+         (fail! "heterogeneous vector types must be a bounded vector"
+                {:type type :limit max-heterogeneous-vector-items}))
+       (vswap! nodes inc)
+       (when (> @nodes max-type-nodes)
+         (fail! "KIR value type exceeds node limit" {:limit max-type-nodes}))
+       (doseq [item-type item-types]
+         (validate-value-type! item-type (inc depth) nodes))
+       type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -60,6 +73,9 @@
 
 (defn- generic-option-type? [type]
   (and (vector? type) (= 2 (count type)) (= :option (first type))))
+
+(defn- heterogeneous-vector-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :vector (first type))))
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -92,7 +108,8 @@
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
 
-(declare validate-value-type! parametric-result-type? variant-type? generic-option-type?)
+(declare validate-value-type! parametric-result-type? variant-type? generic-option-type?
+         heterogeneous-vector-type?)
 
 (defn- type-js [type]
   (validate-value-type! type)
@@ -103,6 +120,9 @@
          (type-js (nth type 2)) "])" )
     (generic-option-type? type)
     (str "Object.freeze(['option'," (type-js (second type)) "])" )
+    (heterogeneous-vector-type? type)
+    (str "Object.freeze(['vector',Object.freeze(["
+         (str/join "," (map type-js (second type))) "])])")
     :else
     (str "Object.freeze(['variant'," (pr-str (str (second type))) ",Object.freeze(["
          (str/join "," (map (fn [[tag payload-type]]
@@ -111,7 +131,8 @@
                             (nth type 2))) "])])")))
 
 (defn- guard-expr [type expression]
-  (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type))
+  (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
+          (heterogeneous-vector-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
            :string "assertString("
@@ -517,6 +538,59 @@
               (fail! "option match branches have different types"
                      {:none none-type :some some-type :node form}))
             none-type))
+        hetero-vector-new
+        (let [[type & items] args
+              item-types (when (heterogeneous-vector-type? type) (second type))]
+          (validate-value-type! type)
+          (when-not (and (heterogeneous-vector-type? type)
+                         (= (count item-types) (count items)))
+            (fail! "heterogeneous vector constructor must exactly match its descriptor"
+                   {:type type :items (count items)}))
+          (doseq [[item item-type] (map vector items item-types)]
+            (require-type! (infer-type item env signatures) item-type item))
+          type)
+        hetero-vector-count
+        (let [[type value] args]
+          (require-arity! op args 2)
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (fail! "heterogeneous vector count requires [:vector [item-types...]]"
+                   {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          :i64)
+        hetero-vector-at
+        (let [[type value index] args
+              item-types (when (heterogeneous-vector-type? type) (second type))]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (and (heterogeneous-vector-type? type) (integer? index)
+                         (<= 0 index) (< index (count item-types)))
+            (fail! "heterogeneous vector index must be an in-range integer literal"
+                   {:type type :index index}))
+          (require-type! (infer-type value env signatures) type value)
+          (nth item-types index))
+        hetero-vector-assoc
+        (let [[type value index item] args
+              item-types (when (heterogeneous-vector-type? type) (second type))]
+          (require-arity! op args 4)
+          (validate-value-type! type)
+          (when-not (and (heterogeneous-vector-type? type) (integer? index)
+                         (<= 0 index) (< index (count item-types)))
+            (fail! "heterogeneous vector index must be an in-range integer literal"
+                   {:type type :index index}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type item env signatures) (nth item-types index) item)
+          type)
+        hetero-vector-equal
+        (let [[type left right] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (heterogeneous-vector-type? type)
+            (fail! "heterogeneous vector equality requires [:vector [item-types...]]"
+                   {:type type}))
+          (require-type! (infer-type left env signatures) type left)
+          (require-type! (infer-type right env signatures) type right)
+          :i64)
         (infer-call-type op args env signatures)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -608,6 +682,21 @@
         (str "matchGenericOption(" (type-js type) "," (a value) ",()=>" (a none-body) ","
              "(" (js-name some-name) ")=>"
              (emit-expr some-body (assoc env some-name (js-name some-name)) functions) ")"))
+      (= op 'hetero-vector-new)
+      (str "makeHeterogeneousVector(" (type-js (first args)) ",["
+           (str/join "," (map a (rest args))) "])")
+      (= op 'hetero-vector-count)
+      (str "BigInt(assertHeterogeneousVector(" (type-js (first args)) ","
+           (a (second args)) ").length-1)")
+      (= op 'hetero-vector-at)
+      (str "heterogeneousVectorAt(" (type-js (first args)) "," (a (second args)) ","
+           (nth args 2) ")")
+      (= op 'hetero-vector-assoc)
+      (str "heterogeneousVectorAssoc(" (type-js (first args)) "," (a (second args)) ","
+           (nth args 2) "," (a (nth args 3)) ")")
+      (= op 'hetero-vector-equal)
+      (str "(heterogeneousVectorEqual(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")?1n:0n)")
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
@@ -814,6 +903,9 @@
                     ",resultProfile:'tagged-i64-i64-v1'"
                     ",parametricAdtLimits:Object.freeze({depth:" max-type-depth
                     ",nodes:" max-type-nodes ",variantCases:" max-variant-cases "})"))
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",heterogeneousVectorLimits:Object.freeze({items:"
+                    max-heterogeneous-vector-items "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -850,6 +942,12 @@
              "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
              "if(t==='vector-i64')return assertVectorI64(v);"
+             "if(Array.isArray(t)&&t.length===2&&t[0]==='vector'&&Array.isArray(t[1])){"
+             "if(t[1].length>" max-heterogeneous-vector-items
+             "||!Array.isArray(v)||v.length!==t[1].length+1||!sameType(v[0],t))"
+             "throw new Error('invalid-heterogeneous-vector');const out=[t];"
+             "for(let i=0;i<t[1].length;i++)out.push(assertTypedValue(t[1][i],v[i+1],d+1,s));"
+             "return Object.freeze(out);}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='option'){"
              "if(!Array.isArray(v)||!sameType(v[0],t)||typeof v[1]!=='boolean'||"
              "(v[1]&&v.length!==3)||(!v[1]&&v.length!==2))throw new Error('invalid-generic-option');"
@@ -878,6 +976,12 @@
              "const genericOptionValue=(t,v,fallback)=>{v=assertGenericOption(t,v);"
              "return v[1]?v[2]:assertTypedValue(t[1],fallback(),1,{nodes:0});};"
              "const matchGenericOption=(t,v,none,some)=>{v=assertGenericOption(t,v);return v[1]?some(v[2]):none();};"
+             "const assertHeterogeneousVector=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const makeHeterogeneousVector=(t,items)=>assertHeterogeneousVector(t,[t,...items]);"
+             "const heterogeneousVectorAt=(t,v,i)=>assertHeterogeneousVector(t,v)[i+1];"
+             "const heterogeneousVectorAssoc=(t,v,i,item)=>{v=assertHeterogeneousVector(t,v);"
+             "const out=v.slice();out[i+1]=item;return assertHeterogeneousVector(t,out);};"
+             "const heterogeneousVectorEqual=(t,a,b)=>sameType(assertHeterogeneousVector(t,a),assertHeterogeneousVector(t,b));"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"

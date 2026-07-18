@@ -379,8 +379,52 @@
     (is (str/includes? source "genericOptionProfile:'typed-tagged-v1'"))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"different types"
                           (script/emit
-                           (assoc-in kir [:functions 2 :body]
+                          (assoc-in kir [:functions 2 :body]
                                      (list 'option-match type 'value 7 'text 'text)))))))
+
+(deftest heterogeneous-vectors-seal-position-types-and-exact-length
+  (let [type [:vector [:i64 :string :bool]]
+        kir {:format :kotoba.kir/v4 :entry nil
+             :exports ['make 'name 'rename 'count-items 'same?] :effects #{}
+             :functions
+             [{:name 'make :params [] :param-types [] :result type :effects #{}
+               :body (list 'hetero-vector-new type 7 "安全" true)}
+              {:name 'name :params ['value] :param-types [type] :result :string :effects #{}
+               :body (list 'hetero-vector-at type 'value 1)}
+              {:name 'rename :params ['value] :param-types [type] :result type :effects #{}
+               :body (list 'hetero-vector-assoc type 'value 1 "確認")}
+              {:name 'count-items :params ['value] :param-types [type] :result :i64 :effects #{}
+               :body (list 'hetero-vector-count type 'value)}
+              {:name 'same? :params ['left 'right] :param-types [type type]
+               :result :i64 :effects #{}
+               :body (list 'hetero-vector-equal type 'left 'right)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "const t=Object.freeze(['vector',Object.freeze(['i64','string','bool'])]);"
+                "const before=x.make(),after=x.rename(before);"
+                "if(before[1]!==7n||before[2]!=='安全'||before[3]!==true||x.name(before)!=='安全')process.exit(2);"
+                "if(after[2]!=='確認'||before[2]!=='安全'||x['count-items'](before)!==3n||!Object.isFrozen(after))process.exit(3);"
+                "if(x['same?'](before,[t,7n,'安全',true])!==1n||x['same?'](before,after)!==0n)process.exit(8);"
+                "try{x.name([Object.freeze(['vector',Object.freeze(['string','string','bool'])]),7n,'安全',true]);process.exit(4)}"
+                "catch(e){if(e.message!=='invalid-heterogeneous-vector')process.exit(5)}"
+                "try{x.name([t,7n,'安全']);process.exit(6)}catch(e){if(e.message!=='invalid-heterogeneous-vector')process.exit(7)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "heterogeneousVectorLimits:Object.freeze({items:32})"))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly match"
+                          (script/emit (assoc-in kir [:functions 0 :body]
+                                                 (list 'hetero-vector-new type 7 "安全")))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"in-range integer literal"
+                          (script/emit (assoc-in kir [:functions 1 :body]
+                                                 (list 'hetero-vector-at type 'value 3))))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"bounded vector"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                          :functions [{:name 'bad :params [] :param-types []
+                                       :result [:vector (vec (repeat 33 :i64))]
+                                       :effects #{} :body 0}]}))))
 
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
