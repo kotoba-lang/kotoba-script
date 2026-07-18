@@ -231,7 +231,7 @@
 
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil :exports ['count-items 'lookup 'update 'append]
+        {:format :kotoba.kir/v4 :entry nil :exports ['count-items 'lookup 'update 'append 'same?]
          :effects #{}
          :functions
          [{:name 'count-items :params ['value] :param-types [:vector-i64]
@@ -242,14 +242,17 @@
            :param-types [:vector-i64 :i64 :i64] :result :vector-i64 :effects #{}
            :body '(vector-assoc value index item)}
           {:name 'append :params ['value 'item] :param-types [:vector-i64 :i64]
-           :result :vector-i64 :effects #{} :body '(vector-conj value item)}]}
+           :result :vector-i64 :effects #{} :body '(vector-conj value item)}
+          {:name 'same? :params ['left 'right] :param-types [:vector-i64 :vector-i64]
+           :result :i64 :effects #{} :body '(= left right)}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});const before=[1n,2n];"
                 "const after=x.update(before,0n,7n);const appended=x.append(after,8n);"
-                "if(x['count-items'](before)!==2n||x.lookup(before,9n)!==99n)process.exit(2);"
+                "if(x['count-items'](before)!==2n||x.lookup(before,9n)!==99n||x.lookup(before,-1n)!==99n||x.lookup(before,9223372036854775807n)!==99n)process.exit(2);"
                 "if(before[0]!==1n||after[0]!==7n||appended.length!==3||!Object.isFrozen(appended))process.exit(3);"
+                "if(x['same?']([1n,2n],[1n,2n])!==1n||x['same?']([1n],[2n])!==0n)process.exit(8);"
                 "for(const bad of [null,[1],[1n,'x']]){try{x['count-items'](bad);process.exit(4)}"
                 "catch(e){if(e.message!=='invalid-vector-i64'&&e.message!=='invalid-i64')process.exit(5)}}"
                 "try{x.update(before,2n,3n);process.exit(6)}catch(e){if(e.message!=='vector-index-out-of-range')process.exit(7)}})")
