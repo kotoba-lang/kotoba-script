@@ -294,6 +294,35 @@
                             :functions [{:name 'bad :params ['x] :param-types [too-deep]
                                          :result :bool :effects #{} :body true}]})))))
 
+(deftest result-match-is-exhaustive-typed-and-lazy
+  (let [type [:result :string :i64]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['describe] :effects #{}
+             :functions
+             [{:name 'describe :params ['r] :param-types [type]
+               :result :string :effects #{}
+               :body (list 'result-match-of type 'r 'text 'text 'code 'code)}]}
+        ;; Use an i64-returning match for executable behavior; the string body
+        ;; above separately proves binder typing without coercing error codes.
+        executable (assoc-in kir [:functions 0]
+                             {:name 'describe :params ['r] :param-types [type]
+                              :result :i64 :effects #{}
+                              :body (list 'result-match-of type 'r 'text
+                                          '(string-byte-length text) 'code 'code)})
+        source (script/emit executable)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.describe([true,'安全'])!==6n||x.describe([false,17n])!==17n)process.exit(2)})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const parametricResultMatch="))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"different types"
+                          (script/emit kir)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"binders"
+                          (script/emit
+                           (assoc-in executable [:functions 0 :body]
+                                     (list 'result-match-of type 'r :bad 1 'code 'code)))))))
+
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil

@@ -387,6 +387,22 @@
           (require-type! (infer-type result env signatures) type result)
           (require-type! (infer-type fallback env signatures) (nth type 2) fallback)
           (nth type 2))
+        result-match-of
+        (let [[type result ok-name ok-body err-name err-body] args]
+          (require-arity! op args 6)
+          (validate-value-type! type)
+          (when-not (parametric-result-type? type)
+            (fail! "result match requires [:result ok-type err-type]" {:type type}))
+          (when-not (and (symbol? ok-name) (nil? (namespace ok-name))
+                         (symbol? err-name) (nil? (namespace err-name)))
+            (fail! "result match binders must be unqualified symbols" {:node form}))
+          (require-type! (infer-type result env signatures) type result)
+          (let [ok-type (infer-type ok-body (assoc env ok-name (second type)) signatures)
+                err-type (infer-type err-body (assoc env err-name (nth type 2)) signatures)]
+            (when-not (= ok-type err-type)
+              (fail! "result match branches have different types"
+                     {:ok ok-type :err err-type :node form}))
+            ok-type))
         (infer-call-type op args env signatures)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -449,6 +465,11 @@
                                    (a (second args)) ",()=>" (a (nth args 2)) ")")
       (= op 'result-error-of) (str "parametricResultError(" (type-js (first args)) ","
                                    (a (second args)) ",()=>" (a (nth args 2)) ")")
+      (= op 'result-match-of)
+      (let [[type result ok-name ok-body err-name err-body] args]
+        (str "parametricResultMatch(" (type-js type) "," (a result) ","
+             "(" (js-name ok-name) ")=>" (emit-expr ok-body (assoc env ok-name (js-name ok-name)) functions) ","
+             "(" (js-name err-name) ")=>" (emit-expr err-body (assoc env err-name (js-name err-name)) functions) ")"))
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
@@ -698,6 +719,8 @@
              "return v[0]?v[1]:assertTypedValue(t[1],fallback(),1,{nodes:0});};"
              "const parametricResultError=(t,v,fallback)=>{v=assertParametricResult(t,v);"
              "return v[0]?assertTypedValue(t[2],fallback(),1,{nodes:0}):v[1];};"
+             "const parametricResultMatch=(t,v,ok,err)=>{v=assertParametricResult(t,v);"
+             "return v[0]?ok(v[1]):err(v[1]);};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"
