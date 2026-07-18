@@ -48,6 +48,11 @@ nodes; runtime payload validation carries the same depth and node budgets.
 Every constructor and projection carries its descriptor, so generated code
 never guesses a payload type from JavaScript shape.
 
+`result-match-of` is the checked KIR form for exhaustive result matching. It
+contains exactly one ok binder/body and one err binder/body; both binders are
+typed from the descriptor, both branch result types must agree, and generated
+code validates the result before evaluating exactly one branch.
+
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
 as signed i64 at every exported boundary. `vector-get` has a lazy explicit
