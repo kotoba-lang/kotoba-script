@@ -19,6 +19,7 @@
 (def ^:private max-variant-cases 32)
 (def ^:private max-heterogeneous-vector-items 32)
 (def ^:private max-set-items 32)
+(def ^:private max-typed-map-entries 32)
 (def ^:private max-record-fields 32)
 
 (declare fail!)
@@ -54,6 +55,10 @@
        type)
      (and (vector? type) (= 2 (count type)) (= :set (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
+     (and (vector? type) (= 3 (count type)) (= :map (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
      (and (vector? type) (= 3 (count type)) (= :record (first type)))
      (let [[_ type-id fields] type]
@@ -100,6 +105,9 @@
 (defn- typed-set-type? [type]
   (and (vector? type) (= 2 (count type)) (= :set (first type))))
 
+(defn- canonical-typed-map-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :map (first type))))
+
 (defn- record-type? [type]
   (and (vector? type) (= 3 (count type)) (= :record (first type))))
 
@@ -130,7 +138,7 @@
   (if (string? value) (pr-str value) "null"))
 
 (declare validate-value-type! parametric-result-type? variant-type? generic-option-type?
-         heterogeneous-vector-type? typed-set-type? record-type?)
+         heterogeneous-vector-type? typed-set-type? canonical-typed-map-type? record-type?)
 
 (defn- type-js [type]
   (validate-value-type! type)
@@ -146,6 +154,9 @@
          (str/join "," (map type-js (second type))) "])])")
     (typed-set-type? type)
     (str "Object.freeze(['set'," (type-js (second type)) "])")
+    (canonical-typed-map-type? type)
+    (str "Object.freeze(['map'," (type-js (second type)) ","
+         (type-js (nth type 2)) "])")
     (record-type? type)
     (str "Object.freeze(['record'," (pr-str (str (second type))) ",Object.freeze(["
          (str/join "," (map (fn [[field field-type]]
@@ -161,7 +172,8 @@
 
 (defn- guard-expr [type expression]
   (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
-          (heterogeneous-vector-type? type) (typed-set-type? type) (record-type? type))
+          (heterogeneous-vector-type? type) (typed-set-type? type)
+          (canonical-typed-map-type? type) (record-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
            :string "assertString("
@@ -675,6 +687,47 @@
           (require-type! (infer-type left env signatures) type left)
           (require-type! (infer-type right env signatures) type right)
           :i64)
+        typed-map-new
+        (let [[type & entries] args]
+          (validate-value-type! type)
+          (when-not (and (canonical-typed-map-type? type) (even? (count entries))
+                         (<= (/ (count entries) 2) max-typed-map-entries))
+            (fail! "typed map constructor shape or entry limit is invalid" {:type type}))
+          (doseq [[key value] (partition 2 entries)]
+            (require-type! (infer-type key env signatures) (second type) key)
+            (require-type! (infer-type value env signatures) (nth type 2) value))
+          type)
+        typed-map-count
+        (let [[type value] args]
+          (require-arity! op args 2) (validate-value-type! type)
+          (require-type! (infer-type value env signatures) type value) :i64)
+        typed-map-contains
+        (let [[type value key] args]
+          (require-arity! op args 3) (validate-value-type! type)
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type key env signatures) (second type) key) :bool)
+        typed-map-get
+        (let [[type value key] args]
+          (require-arity! op args 3) (validate-value-type! type)
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type key env signatures) (second type) key)
+          [:option (nth type 2)])
+        typed-map-assoc
+        (let [[type value key item] args]
+          (require-arity! op args 4) (validate-value-type! type)
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type key env signatures) (second type) key)
+          (require-type! (infer-type item env signatures) (nth type 2) item) type)
+        typed-map-dissoc
+        (let [[type value key] args]
+          (require-arity! op args 3) (validate-value-type! type)
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type key env signatures) (second type) key) type)
+        typed-map-equal
+        (let [[type left right] args]
+          (require-arity! op args 3) (validate-value-type! type)
+          (require-type! (infer-type left env signatures) type left)
+          (require-type! (infer-type right env signatures) type right) :i64)
         record-new
         (let [[type & values] args
               fields (when (record-type? type) (nth type 2))]
@@ -841,6 +894,29 @@
            (a (nth args 2)) ")")
       (= op 'typed-set-equal)
       (str "(typedSetEqual(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")?1n:0n)")
+      (= op 'typed-map-new)
+      (str "makeTypedMap(" (type-js (first args)) ",["
+           (str/join "," (map (fn [[key item]]
+                                (str "[" (a key) "," (a item) "]"))
+                              (partition 2 (rest args)))) "])")
+      (= op 'typed-map-count)
+      (str "BigInt(assertTypedMap(" (type-js (first args)) ","
+           (a (second args)) ")[1].length)")
+      (= op 'typed-map-contains)
+      (str "typedMapContains(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
+      (= op 'typed-map-get)
+      (str "typedMapGet(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
+      (= op 'typed-map-assoc)
+      (str "typedMapAssoc(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) "," (a (nth args 3)) ")")
+      (= op 'typed-map-dissoc)
+      (str "typedMapDissoc(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
+      (= op 'typed-map-equal)
+      (str "(typedMapEqual(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")?1n:0n)")
       (= op 'record-new)
       (str "makeRecord(" (type-js (first args)) ",["
@@ -1069,6 +1145,8 @@
                (str ",typedSetLimits:Object.freeze({items:" max-set-items "})"))
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",recordLimits:Object.freeze({fields:" max-record-fields "})"))
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",typedMapLimits:Object.freeze({entries:" max-typed-map-entries "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -1118,6 +1196,14 @@
              "items.sort((a,b)=>compareTyped(t[1],a,b));"
              "for(let i=1;i<items.length;i++)if(compareTyped(t[1],items[i-1],items[i])===0)"
              "throw new Error('duplicate-set-item');return Object.freeze([t,Object.freeze(items)]);}"
+             "if(Array.isArray(t)&&t.length===3&&t[0]==='map'){"
+             "if(!Array.isArray(v)||v.length!==2||!sameType(v[0],t)||!Array.isArray(v[1])||v[1].length>"
+             max-typed-map-entries ")throw new Error('invalid-typed-map');"
+             "const entries=v[1].map(e=>{if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-typed-map-entry');"
+             "return Object.freeze([assertTypedValue(t[1],e[0],d+1,s),assertTypedValue(t[2],e[1],d+1,s)]);});"
+             "entries.sort((a,b)=>compareTyped(t[1],a[0],b[0]));"
+             "for(let i=1;i<entries.length;i++)if(compareTyped(t[1],entries[i-1][0],entries[i][0])===0)"
+             "throw new Error('duplicate-map-key');return Object.freeze([t,Object.freeze(entries)]);}"
              "if(Array.isArray(t)&&t.length===3&&t[0]==='record'){"
              "if(!Array.isArray(t[2])||t[2].length<1||t[2].length>" max-record-fields
              "||!Array.isArray(v)||v.length!==t[2].length+1||!sameType(v[0],t))"
@@ -1173,6 +1259,9 @@
              "if(Array.isArray(t)&&t[0]==='vector')return compareList(t[1],a.slice(1),b.slice(1));"
              "if(Array.isArray(t)&&t[0]==='set'){const ai=a[1],bi=b[1],n=Math.min(ai.length,bi.length);"
              "for(let i=0;i<n;i++){const c=compareTyped(t[1],ai[i],bi[i]);if(c)return c;}return cmp(ai.length,bi.length);}"
+             "if(Array.isArray(t)&&t[0]==='map'){const ai=a[1],bi=b[1],n=Math.min(ai.length,bi.length);"
+             "for(let i=0;i<n;i++){let c=compareTyped(t[1],ai[i][0],bi[i][0]);if(c)return c;"
+             "c=compareTyped(t[2],ai[i][1],bi[i][1]);if(c)return c;}return cmp(ai.length,bi.length);}"
              "if(Array.isArray(t)&&t[0]==='record')return compareList(t[2].map(f=>f[1]),a.slice(1),b.slice(1));"
              "throw new Error('unordered-value-type');};"
              "const assertTypedSet=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
@@ -1186,6 +1275,21 @@
              "return makeTypedSet(t,v[1].filter(x=>compareTyped(t[1],x,item)!==0));};"
              "const typedSetEqual=(t,a,b)=>{a=assertTypedSet(t,a);b=assertTypedSet(t,b);"
              "return a[1].length===b[1].length&&a[1].every((x,i)=>compareTyped(t[1],x,b[1][i])===0);};"
+             "const assertTypedMap=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const makeTypedMap=(t,entries)=>assertTypedMap(t,[t,entries]);"
+             "const typedMapIndex=(t,v,key)=>{v=assertTypedMap(t,v);key=assertTypedValue(t[1],key,1,{nodes:0});"
+             "return [v,v[1].findIndex(e=>compareTyped(t[1],e[0],key)===0),key];};"
+             "const typedMapContains=(t,v,key)=>typedMapIndex(t,v,key)[1]>=0;"
+             "const typedMapGet=(t,v,key)=>{const [m,i]=typedMapIndex(t,v,key),ot=Object.freeze(['option',t[2]]);"
+             "return makeGenericOption(ot,i>=0,i>=0?m[1][i][1]:null);};"
+             "const typedMapAssoc=(t,v,key,item)=>{const [m,i,k]=typedMapIndex(t,v,key);"
+             "item=assertTypedValue(t[2],item,1,{nodes:0});if(i<0&&m[1].length>=" max-typed-map-entries
+             ")throw new Error('map-too-large');const out=m[1].slice();if(i<0)out.push([k,item]);else out[i]=[k,item];"
+             "return makeTypedMap(t,out);};"
+             "const typedMapDissoc=(t,v,key)=>{const [m,i]=typedMapIndex(t,v,key);"
+             "return i<0?m:makeTypedMap(t,m[1].filter((_,j)=>j!==i));};"
+             "const typedMapEqual=(t,a,b)=>{a=assertTypedMap(t,a);b=assertTypedMap(t,b);"
+             "return compareTyped(t,a,b)===0;};"
              "const assertRecord=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
              "const makeRecord=(t,values)=>assertRecord(t,[t,...values]);"
              "const recordFieldIndex=(t,field)=>{const i=t[2].findIndex(f=>f[0]===field);"

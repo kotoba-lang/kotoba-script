@@ -644,6 +644,34 @@
     (is (thrown? clojure.lang.ExceptionInfo
                  (script/verify-output! source)))))
 
+(deftest bounded-typed-maps-execute-with-canonical-keys-and-typed-absence
+  (let [type [:map :keyword :i64]
+        option-type [:option :i64]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['present 'missing 'updated]
+             :effects #{}
+             :functions
+             [{:name 'present :params [] :param-types [] :result option-type :effects #{}
+               :body (list 'typed-map-get type
+                           (list 'typed-map-new type :b 2 :a 1) :b)}
+              {:name 'missing :params [] :param-types [] :result option-type :effects #{}
+               :body (list 'typed-map-get type (list 'typed-map-new type) :x)}
+              {:name 'updated :params [] :param-types [] :result :i64 :effects #{}
+               :body (list 'typed-map-count type
+                           (list 'typed-map-dissoc type
+                                 (list 'typed-map-assoc type
+                                       (list 'typed-map-new type :a 1) :b 2)
+                                 :a))}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "const p=x.present(),n=x.missing();"
+                     "if(p[1]!==true||p[2]!==2n||n[1]!==false||x.updated()!==1n)process.exit(2)})"))]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "typedMapLimits:Object.freeze({entries:32})"))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
     (System/exit (if (pos? (+ fail error)) 1 0))))
