@@ -321,11 +321,26 @@
                             (sort-by (comp str key) source-digests)))
          "})")))
 
+(defn- supply-chain-seal-source
+  [package-lock-digest trust-policy-digest package-receipt-digest]
+  (let [digests [package-lock-digest trust-policy-digest package-receipt-digest]
+        supplied (count (filter some? digests))]
+    (when-not (or (zero? supplied) (= 3 supplied))
+      (fail! "package lock, trust policy, and package receipt digests must be supplied together" {}))
+    (when (pos? supplied)
+      (when-not (every? sha256? digests)
+        (fail! "supply-chain digest is not canonical SHA-256" {}))
+      (str ",packageLockDigest:" (js-string package-lock-digest)
+           ",trustPolicyDigest:" (js-string trust-policy-digest)
+           ",packageReceiptDigest:" (js-string package-receipt-digest)))))
+
 (defn emit
   "Emit a restricted ESM string from checked `:kotoba.kir/v3` data."
   ([kir] (emit kir {}))
   ([kir {:keys [source-digest kir-digest compiler-version
-                module-graph-digest module-source-digests]}]
+                module-graph-digest module-source-digests
+                package-lock-digest trust-policy-digest
+                package-receipt-digest]}]
   (when-not (contains? supported-kir-formats (:format kir))
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
@@ -370,6 +385,8 @@
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
              (module-seal-source module-graph-digest module-source-digests)
+             (supply-chain-seal-source package-lock-digest trust-policy-digest
+                                       package-receipt-digest)
              ",requiredCapabilities:Object.freeze([" (str/join "," caps) "])});\n"
              "export function instantiateKotoba(grants=Object.freeze({})){\n"
              "const grantIds=Object.keys(grants).map(Number).sort((a,b)=>a-b);"

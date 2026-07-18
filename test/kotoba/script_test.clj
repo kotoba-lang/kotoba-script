@@ -47,6 +47,23 @@
                           (script/emit kir {:module-graph-digest a
                                             :module-source-digests {"example.app" c}})))))
 
+(deftest supply-chain-identity-is-frozen-into-the-esm-artifact
+  (let [a (apply str (repeat 64 "a"))
+        b (apply str (repeat 64 "b"))
+        c (apply str (repeat 64 "c"))
+        source (script/emit kir {:package-lock-digest a
+                                 :trust-policy-digest b
+                                 :package-receipt-digest c})]
+    (is (str/includes? source (str "packageLockDigest:\"" a "\"")))
+    (is (str/includes? source (str "trustPolicyDigest:\"" b "\"")))
+    (is (str/includes? source (str "packageReceiptDigest:\"" c "\"")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be supplied together"
+                          (script/emit kir {:package-lock-digest a})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"canonical SHA-256"
+                          (script/emit kir {:package-lock-digest a
+                                            :trust-policy-digest "bad"
+                                            :package-receipt-digest c})))))
+
 (deftest equality-is-comparison-and-grants-are-exact
   (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main :effects #{}
                              :functions [{:name 'main :params [] :body '(= 1 2)}]})]
