@@ -80,6 +80,15 @@ values against the same descriptor and then compares every canonical nested
 value structurally; JavaScript object identity is never observed. Dynamic indexes, sparse values,
 append/drop operations, and host mutation are not admitted by this profile.
 
+Typed sets use `[:set item-type]` and at most 32 values inside the shared
+depth/node budget. Their canonical host value is `[descriptor, items]`, where
+items are recursively validated, uniquely sorted by a language-owned total
+order, and frozen. Constructors reject duplicates instead of silently losing
+input. Membership, idempotent insertion, removal, count, and equality operate
+on canonical values; updates never mutate their input. The total order covers
+every currently admitted scalar and structured value type, so neither
+JavaScript insertion order nor object identity participates in set semantics.
+
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
 as signed i64 at every exported boundary. `vector-get` has a lazy explicit

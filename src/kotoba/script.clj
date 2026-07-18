@@ -17,6 +17,7 @@
 (def ^:private max-type-nodes 64)
 (def ^:private max-variant-cases 32)
 (def ^:private max-heterogeneous-vector-items 32)
+(def ^:private max-set-items 32)
 
 (declare fail!)
 
@@ -49,6 +50,9 @@
        (doseq [item-type item-types]
          (validate-value-type! item-type (inc depth) nodes))
        type)
+     (and (vector? type) (= 2 (count type)) (= :set (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
      (and (vector? type) (= 3 (count type)) (= :variant (first type)))
      (let [[_ type-id cases] type]
        (when-not (and (keyword? type-id) (namespace type-id))
@@ -76,6 +80,9 @@
 
 (defn- heterogeneous-vector-type? [type]
   (and (vector? type) (= 2 (count type)) (= :vector (first type))))
+
+(defn- typed-set-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :set (first type))))
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -109,7 +116,7 @@
   (if (string? value) (pr-str value) "null"))
 
 (declare validate-value-type! parametric-result-type? variant-type? generic-option-type?
-         heterogeneous-vector-type?)
+         heterogeneous-vector-type? typed-set-type?)
 
 (defn- type-js [type]
   (validate-value-type! type)
@@ -123,6 +130,8 @@
     (heterogeneous-vector-type? type)
     (str "Object.freeze(['vector',Object.freeze(["
          (str/join "," (map type-js (second type))) "])])")
+    (typed-set-type? type)
+    (str "Object.freeze(['set'," (type-js (second type)) "])")
     :else
     (str "Object.freeze(['variant'," (pr-str (str (second type))) ",Object.freeze(["
          (str/join "," (map (fn [[tag payload-type]]
@@ -132,7 +141,7 @@
 
 (defn- guard-expr [type expression]
   (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
-          (heterogeneous-vector-type? type))
+          (heterogeneous-vector-type? type) (typed-set-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
            :string "assertString("
@@ -591,6 +600,61 @@
           (require-type! (infer-type left env signatures) type left)
           (require-type! (infer-type right env signatures) type right)
           :i64)
+        typed-set-new
+        (let [[type & items] args]
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (fail! "typed set constructor requires [:set item-type]" {:type type}))
+          (when (> (count items) max-set-items)
+            (fail! "typed set constructor exceeds item limit"
+                   {:items (count items) :limit max-set-items}))
+          (doseq [item items]
+            (require-type! (infer-type item env signatures) (second type) item))
+          type)
+        typed-set-count
+        (let [[type value] args]
+          (require-arity! op args 2)
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (fail! "typed set count requires [:set item-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          :i64)
+        typed-set-contains
+        (let [[type value item] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (fail! "typed set membership requires [:set item-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type item env signatures) (second type) item)
+          :bool)
+        typed-set-conj
+        (let [[type value item] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (fail! "typed set insertion requires [:set item-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type item env signatures) (second type) item)
+          type)
+        typed-set-disj
+        (let [[type value item] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (fail! "typed set removal requires [:set item-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type item env signatures) (second type) item)
+          type)
+        typed-set-equal
+        (let [[type left right] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (typed-set-type? type)
+            (fail! "typed set equality requires [:set item-type]" {:type type}))
+          (require-type! (infer-type left env signatures) type left)
+          (require-type! (infer-type right env signatures) type right)
+          :i64)
         (infer-call-type op args env signatures)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -696,6 +760,23 @@
            (nth args 2) "," (a (nth args 3)) ")")
       (= op 'hetero-vector-equal)
       (str "(heterogeneousVectorEqual(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")?1n:0n)")
+      (= op 'typed-set-new)
+      (str "makeTypedSet(" (type-js (first args)) ",["
+           (str/join "," (map a (rest args))) "])")
+      (= op 'typed-set-count)
+      (str "BigInt(assertTypedSet(" (type-js (first args)) "," (a (second args)) ")[1].length)")
+      (= op 'typed-set-contains)
+      (str "typedSetContains(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
+      (= op 'typed-set-conj)
+      (str "typedSetConj(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
+      (= op 'typed-set-disj)
+      (str "typedSetDisj(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
+      (= op 'typed-set-equal)
+      (str "(typedSetEqual(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")?1n:0n)")
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
@@ -906,6 +987,8 @@
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",heterogeneousVectorLimits:Object.freeze({items:"
                     max-heterogeneous-vector-items "})"))
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",typedSetLimits:Object.freeze({items:" max-set-items "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -948,6 +1031,13 @@
              "throw new Error('invalid-heterogeneous-vector');const out=[t];"
              "for(let i=0;i<t[1].length;i++)out.push(assertTypedValue(t[1][i],v[i+1],d+1,s));"
              "return Object.freeze(out);}"
+             "if(Array.isArray(t)&&t.length===2&&t[0]==='set'){"
+             "if(!Array.isArray(v)||v.length!==2||!sameType(v[0],t)||!Array.isArray(v[1])||v[1].length>"
+             max-set-items ")throw new Error('invalid-typed-set');"
+             "const items=v[1].map(x=>assertTypedValue(t[1],x,d+1,s));"
+             "items.sort((a,b)=>compareTyped(t[1],a,b));"
+             "for(let i=1;i<items.length;i++)if(compareTyped(t[1],items[i-1],items[i])===0)"
+             "throw new Error('duplicate-set-item');return Object.freeze([t,Object.freeze(items)]);}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='option'){"
              "if(!Array.isArray(v)||!sameType(v[0],t)||typeof v[1]!=='boolean'||"
              "(v[1]&&v.length!==3)||(!v[1]&&v.length!==2))throw new Error('invalid-generic-option');"
@@ -982,6 +1072,33 @@
              "const heterogeneousVectorAssoc=(t,v,i,item)=>{v=assertHeterogeneousVector(t,v);"
              "const out=v.slice();out[i+1]=item;return assertHeterogeneousVector(t,out);};"
              "const heterogeneousVectorEqual=(t,a,b)=>sameType(assertHeterogeneousVector(t,a),assertHeterogeneousVector(t,b));"
+             "const cmp=(a,b)=>a<b?-1:a>b?1:0;"
+             "const compareList=(types,a,b)=>{for(let i=0;i<types.length;i++){const c=compareTyped(types[i],a[i],b[i]);if(c)return c;}return 0;};"
+             "const compareTyped=(t,a,b)=>{if(t==='i64'||t==='string'||t==='keyword')return cmp(a,b);"
+             "if(t==='bool')return a===b?0:(a?1:-1);"
+             "if(t==='option-i64'){if(a[0]!==b[0])return a[0]?1:-1;return a[0]?cmp(a[1],b[1]):0;}"
+             "if(t==='result-i64'){if(a[0]!==b[0])return a[0]?1:-1;return cmp(a[1],b[1]);}"
+             "if(t==='vector-i64'){const n=Math.min(a.length,b.length);for(let i=0;i<n;i++){const c=cmp(a[i],b[i]);if(c)return c;}return cmp(a.length,b.length);}"
+             "if(t==='map'){const n=Math.min(a.length,b.length);for(let i=0;i<n;i++){let c=cmp(a[i][0],b[i][0]);if(c)return c;c=cmp(a[i][1],b[i][1]);if(c)return c;}return cmp(a.length,b.length);}"
+             "if(Array.isArray(t)&&t[0]==='option'){if(a[1]!==b[1])return a[1]?1:-1;return a[1]?compareTyped(t[1],a[2],b[2]):0;}"
+             "if(Array.isArray(t)&&t[0]==='result'){if(a[0]!==b[0])return a[0]?1:-1;return compareTyped(a[0]?t[1]:t[2],a[1],b[1]);}"
+             "if(Array.isArray(t)&&t[0]==='variant'){const ai=t[2].findIndex(c=>c[0]===a[1]),bi=t[2].findIndex(c=>c[0]===b[1]);"
+             "if(ai!==bi)return cmp(ai,bi);return compareTyped(t[2][ai][1],a[2],b[2]);}"
+             "if(Array.isArray(t)&&t[0]==='vector')return compareList(t[1],a.slice(1),b.slice(1));"
+             "if(Array.isArray(t)&&t[0]==='set'){const ai=a[1],bi=b[1],n=Math.min(ai.length,bi.length);"
+             "for(let i=0;i<n;i++){const c=compareTyped(t[1],ai[i],bi[i]);if(c)return c;}return cmp(ai.length,bi.length);}"
+             "throw new Error('unordered-value-type');};"
+             "const assertTypedSet=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const makeTypedSet=(t,items)=>assertTypedSet(t,[t,items]);"
+             "const typedSetContains=(t,v,item)=>{v=assertTypedSet(t,v);item=assertTypedValue(t[1],item,1,{nodes:0});"
+             "return v[1].some(x=>compareTyped(t[1],x,item)===0);};"
+             "const typedSetConj=(t,v,item)=>{v=assertTypedSet(t,v);item=assertTypedValue(t[1],item,1,{nodes:0});"
+             "if(v[1].some(x=>compareTyped(t[1],x,item)===0))return v;"
+             "if(v[1].length>=" max-set-items ")throw new Error('set-too-large');return makeTypedSet(t,[...v[1],item]);};"
+             "const typedSetDisj=(t,v,item)=>{v=assertTypedSet(t,v);item=assertTypedValue(t[1],item,1,{nodes:0});"
+             "return makeTypedSet(t,v[1].filter(x=>compareTyped(t[1],x,item)!==0));};"
+             "const typedSetEqual=(t,a,b)=>{a=assertTypedSet(t,a);b=assertTypedSet(t,b);"
+             "return a[1].length===b[1].length&&a[1].every((x,i)=>compareTyped(t[1],x,b[1][i])===0);};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"
