@@ -140,6 +140,34 @@
                                         :functions [{:name 'bad :params [] :param-types []
                                                      :result :string :effects #{} :body unpaired}]})))))
 
+(deftest typed-keywords-preserve-canonical-text-without-hashing
+  (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['identity 'same?]
+                   :effects #{}
+                   :functions [{:name 'identity :params ['value] :param-types [:keyword]
+                                :result :keyword :effects #{} :body 'value}
+                               {:name 'same? :params ['left 'right]
+                                :param-types [:keyword :keyword]
+                                :result :i64 :effects #{} :body '(= left right)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.identity(':安全/確認')!==':安全/確認')process.exit(2);"
+                "if(x['same?'](':a',':a')!==1n||x['same?'](':a',':b')!==0n)process.exit(3);"
+                "try{x.identity('not-a-keyword');process.exit(4)}"
+                "catch(e){if(e.message!=='invalid-keyword')process.exit(5)}"
+                "try{x.identity(1n);process.exit(6)}"
+                "catch(e){if(e.message!=='invalid-keyword')process.exit(7)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "assertKeyword"))
+    (is (str/includes? source "keywordLimits:Object.freeze({valueBytes:512})")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"different types"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                          :functions [{:name 'bad :params [] :param-types []
+                                       :result :i64 :effects #{} :body '(= :a 1)}]}))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo
