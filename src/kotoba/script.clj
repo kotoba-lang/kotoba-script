@@ -712,6 +712,12 @@
           (require-type! (infer-type value env signatures) type value)
           (require-type! (infer-type key env signatures) (second type) key)
           [:option (nth type 2)])
+        typed-map-entry-at
+        (let [[type value index] args]
+          (require-arity! op args 3) (validate-value-type! type)
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type index env signatures) :i64 index)
+          [:option [:vector [(second type) (nth type 2)]]])
         typed-map-assoc
         (let [[type value key item] args]
           (require-arity! op args 4) (validate-value-type! type)
@@ -908,6 +914,9 @@
            (a (nth args 2)) ")")
       (= op 'typed-map-get)
       (str "typedMapGet(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
+      (= op 'typed-map-entry-at)
+      (str "typedMapEntryAt(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")")
       (= op 'typed-map-assoc)
       (str "typedMapAssoc(" (type-js (first args)) "," (a (second args)) ","
@@ -1282,6 +1291,10 @@
              "const typedMapContains=(t,v,key)=>typedMapIndex(t,v,key)[1]>=0;"
              "const typedMapGet=(t,v,key)=>{const [m,i]=typedMapIndex(t,v,key),ot=Object.freeze(['option',t[2]]);"
              "return makeGenericOption(ot,i>=0,i>=0?m[1][i][1]:null);};"
+             "const typedMapEntryAt=(t,v,index)=>{v=assertTypedMap(t,v);index=assertI64(index);"
+             "const et=Object.freeze(['vector',Object.freeze([t[1],t[2]])]),ot=Object.freeze(['option',et]);"
+             "if(index<0n||index>=BigInt(v[1].length))return makeGenericOption(ot,false,null);"
+             "const e=v[1][Number(index)];return makeGenericOption(ot,true,Object.freeze([et,e[0],e[1]]));};"
              "const typedMapAssoc=(t,v,key,item)=>{const [m,i,k]=typedMapIndex(t,v,key);"
              "item=assertTypedValue(t[2],item,1,{nodes:0});if(i<0&&m[1].length>=" max-typed-map-entries
              ")throw new Error('map-too-large');const out=m[1].slice();if(i<0)out.push([k,item]);else out[i]=[k,item];"
