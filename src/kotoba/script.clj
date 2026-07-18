@@ -7,9 +7,10 @@
 
 (def artifact-schema "kotoba-js-artifact/v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :string})
+(def ^:private value-types #{:i64 :string :keyword})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
+(def ^:private max-keyword-bytes 512)
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -64,6 +65,15 @@
           (fail! "KIR string contains an unpaired low surrogate" {:index index})
           :else (recur (inc index) (+ total 3)))))))
 
+(defn- keyword-text [value]
+  (when-not (keyword? value)
+    (fail! "KIR keyword literal is invalid" {:node value}))
+  (let [text (str value)
+        bytes (utf8-byte-count text)]
+    (when (> bytes max-keyword-bytes)
+      (fail! "KIR keyword exceeds byte limit" {:bytes bytes :limit max-keyword-bytes}))
+    text))
+
 (defn- typed-signatures [kir]
   (let [typed? (= :kotoba.kir/v4 (:format kir))]
     (into {}
@@ -104,7 +114,15 @@
                                     2 :positive))
           (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
 
-      (contains? '#{= < > <= >=} op)
+      (= op '=)
+      (do (require-arity! op args 2)
+          (when-not (= (first types) (second types))
+            (fail! "KIR equality operands have different types" {:types types :node args}))
+          (when-not (contains? #{:i64 :keyword} (first types))
+            (fail! "KIR equality type is unsupported" {:type (first types)}))
+          :i64)
+
+      (contains? '#{< > <= >=} op)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
 
@@ -144,6 +162,7 @@
         (fail! "KIR string literal exceeds byte limit"
                {:bytes bytes :limit max-string-literal-bytes}))
       :string)
+    (keyword? form) (do (keyword-text form) :keyword)
     (symbol? form) (or (get env form)
                        (fail! "unbound KIR symbol" {:symbol form}))
     (seq? form)
@@ -173,14 +192,18 @@
 
 (defn- validate-types! [kir]
   (let [signatures (typed-signatures kir)
+        nodes (mapcat #(tree-seq coll? seq (:body %)) (:functions kir))
         literal-bytes (reduce + 0
                               (map utf8-byte-count
-                                   (filter string?
-                                           (mapcat #(tree-seq coll? seq (:body %))
-                                                   (:functions kir)))))]
+                                   (filter string? nodes)))
+        keyword-bytes (reduce + 0 (map (comp utf8-byte-count keyword-text)
+                                       (filter keyword? nodes)))]
     (when (> literal-bytes max-string-value-bytes)
       (fail! "KIR module string literals exceed byte limit"
              {:bytes literal-bytes :limit max-string-value-bytes}))
+    (when (> keyword-bytes max-string-value-bytes)
+      (fail! "KIR module keyword literals exceed byte limit"
+             {:bytes keyword-bytes :limit max-string-value-bytes}))
     (doseq [{:keys [name params param-types result body]} (:functions kir)]
       (let [types (if (= :kotoba.kir/v4 (:format kir))
                     param-types (vec (repeat (count params) :i64)))
@@ -220,6 +243,7 @@
   (cond
     (integer? form) (bigint-literal form)
     (string? form) (js-string form)
+    (keyword? form) (js-string (keyword-text form))
     (symbol? form) (or (get env form)
                        (fail! "unbound KIR symbol" {:symbol form}))
     (seq? form)
@@ -365,12 +389,18 @@
                                guards (apply str
                                              (map (fn [param type]
                                                     (str (js-name param) "="
-                                                         (if (= type :string) "assertString(" "assertI64(")
+                                                         (case type
+                                                           :string "assertString("
+                                                           :keyword "assertKeyword("
+                                                           "assertI64(")
                                                          (js-name param) ");"))
                                                   params param-types))]
                            (str "function " (js-name name) "("
                                 (str/join "," (map js-name params)) "){charge();" guards "return "
-                                (if (= result :string) "assertString(" "assertI64(")
+                                (case result
+                                  :string "assertString("
+                                  :keyword "assertKeyword("
+                                  "assertI64(")
                                 (emit-expr body env functions) ");}")))
                        (:functions kir)))
         source
@@ -380,7 +410,8 @@
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",stringLimits:Object.freeze({literalBytes:" max-string-literal-bytes
                     ",moduleLiteralBytes:" max-string-value-bytes
-                    ",valueBytes:" max-string-value-bytes "})"))
+                    ",valueBytes:" max-string-value-bytes "})"
+                    ",keywordLimits:Object.freeze({valueBytes:" max-keyword-bytes "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -402,6 +433,10 @@
              "else if(u>=56320&&u<=57343)throw new Error('invalid-utf16');else n+=3;}return n;};"
              "const assertString=v=>{if(typeof v!=='string')throw new Error('invalid-string');"
              "if(utf8Bytes(v)>" max-string-value-bytes ")throw new Error('string-too-large');return v;};"
+             "const assertKeyword=v=>{if(typeof v!=='string'||v.length<2||v[0]!==':'||"
+             "v.includes('::')||/\\s|[\\[\\]{}()\"',;@`~^\\\\]/u.test(v))"
+             "throw new Error('invalid-keyword');if(utf8Bytes(v)>" max-keyword-bytes
+             ")throw new Error('keyword-too-large');return v;};"
              "let fuel=256;"
              "const charge=()=>{fuel--;if(fuel<0)throw new Error('fuel-exhausted');};"
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"
