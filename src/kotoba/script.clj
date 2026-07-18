@@ -7,10 +7,11 @@
 
 (def artifact-schema "kotoba-js-artifact/v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :string :keyword})
+(def ^:private value-types #{:i64 :string :keyword :map})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
+(def ^:private max-map-entries 128)
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -143,6 +144,34 @@
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
 
+      (= op 'map-new)
+      (do (when (odd? (count args))
+            (fail! "KIR map-new requires key/value pairs" {:node args}))
+          (doseq [[[key-form value-form] [key-type value-type]]
+                  (map vector (partition 2 args) (partition 2 types))]
+            (require-type! key-type :keyword key-form)
+            (require-type! value-type :i64 value-form))
+          (when (> (quot (count args) 2) max-map-entries)
+            (fail! "KIR map literal exceeds entry limit" {:entries (quot (count args) 2)}))
+          :map)
+
+      (= op 'map-get)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :map (nth args 0))
+          (require-type! (nth types 1) :keyword (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2))
+          :i64)
+
+      (= op 'map-assoc)
+      (do (when-not (and (>= (count args) 3) (odd? (count args)))
+            (fail! "KIR map-assoc requires map and key/value pairs" {:node args}))
+          (require-type! (first types) :map (first args))
+          (doseq [[[key-form value-form] [key-type value-type]]
+                  (map vector (partition 2 (rest args)) (partition 2 (rest types)))]
+            (require-type! key-type :keyword key-form)
+            (require-type! value-type :i64 value-form))
+          :map)
+
       (contains? signatures op)
       (let [{expected :param-types result :result} (get signatures op)]
         (when-not (= (count expected) (count types))
@@ -161,7 +190,8 @@
       (when (> bytes max-string-literal-bytes)
         (fail! "KIR string literal exceeds byte limit"
                {:bytes bytes :limit max-string-literal-bytes}))
-      :string)
+          :string)
+
     (keyword? form) (do (keyword-text form) :keyword)
     (symbol? form) (or (get env form)
                        (fail! "unbound KIR symbol" {:symbol form}))
@@ -235,6 +265,16 @@
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'map-new)
+      (str "makeMap([" (str/join "," (map (fn [[key value]]
+                                               (str "[" (a key) "," (a value) "]"))
+                                             (partition 2 args))) "])")
+      (= op 'map-get) (str "mapGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
+                           (a (nth args 2)) ")")
+      (= op 'map-assoc)
+      (str "mapAssoc(" (a (first args)) ",["
+           (str/join "," (map (fn [[key value]] (str "[" (a key) "," (a value) "]"))
+                              (partition 2 (rest args)))) "])")
       (contains? functions op)
       (str (js-name op) "(" (str/join "," (map a args)) ")")
       :else (fail! "unsupported KIR operation" {:operation op}))))
@@ -392,6 +432,7 @@
                                                          (case type
                                                            :string "assertString("
                                                            :keyword "assertKeyword("
+                                                           :map "assertMap("
                                                            "assertI64(")
                                                          (js-name param) ");"))
                                                   params param-types))]
@@ -400,6 +441,7 @@
                                 (case result
                                   :string "assertString("
                                   :keyword "assertKeyword("
+                                  :map "assertMap("
                                   "assertI64(")
                                 (emit-expr body env functions) ");}")))
                        (:functions kir)))
@@ -412,6 +454,8 @@
                     ",moduleLiteralBytes:" max-string-value-bytes
                     ",valueBytes:" max-string-value-bytes "})"
                     ",keywordLimits:Object.freeze({valueBytes:" max-keyword-bytes "})"))
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -437,6 +481,18 @@
              "v.includes('::')||/\\s|[\\[\\]{}()\"',;@`~^\\\\]/u.test(v))"
              "throw new Error('invalid-keyword');if(utf8Bytes(v)>" max-keyword-bytes
              ")throw new Error('keyword-too-large');return v;};"
+             "const makeMap=entries=>{if(!Array.isArray(entries)||entries.length>" max-map-entries
+             ")throw new Error('map-too-large');const seen=new Set();const out=[];"
+             "for(const entry of entries){if(!Array.isArray(entry)||entry.length!==2)throw new Error('invalid-map');"
+             "const k=assertKeyword(entry[0]);const v=assertI64(entry[1]);"
+             "if(seen.has(k))throw new Error('duplicate-map-key');seen.add(k);out.push(Object.freeze([k,v]));}"
+             "out.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);return Object.freeze(out);};"
+             "const assertMap=v=>makeMap(v);"
+             "const mapGet=(m,k,fallback)=>{m=assertMap(m);k=assertKeyword(k);"
+             "for(const e of m)if(e[0]===k)return e[1];return fallback();};"
+             "const mapAssoc=(m,entries)=>{m=assertMap(m);const merged=new Map(m);"
+             "for(const e of entries){if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-map');"
+             "merged.set(assertKeyword(e[0]),assertI64(e[1]));}return makeMap(Array.from(merged));};"
              "let fuel=256;"
              "const charge=()=>{fuel--;if(fuel<0)throw new Error('fuel-exhausted');};"
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"

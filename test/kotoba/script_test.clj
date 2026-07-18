@@ -168,6 +168,28 @@
                           :functions [{:name 'bad :params [] :param-types []
                                        :result :i64 :effects #{} :body '(= :a 1)}]}))))
 
+(deftest typed-bounded-maps-use-canonical-persistent-keyword-entries
+  (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['lookup 'update]
+                   :effects #{}
+                   :functions [{:name 'lookup :params ['value] :param-types [:map]
+                                :result :i64 :effects #{} :body '(map-get value :a 0)}
+                               {:name 'update :params ['value] :param-types [:map]
+                                :result :map :effects #{}
+                                :body '(map-assoc value :b 2 :a 3)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "const before=[[':a',1n]];const after=x.update(before);"
+                "if(x.lookup(before)!==1n||x.lookup(after)!==3n)process.exit(2);"
+                "if(before[0][1]!==1n||after.length!==2||after[0][0]!==':a'||after[1][0]!==':b')process.exit(3);"
+                "try{x.lookup([[':a',1n],[':a',2n]]);process.exit(4)}"
+                "catch(e){if(e.message!=='duplicate-map-key')process.exit(5)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "mapLimits:Object.freeze({entries:128})"))
+    (is (str/includes? source "const makeMap="))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo
