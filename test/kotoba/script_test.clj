@@ -258,6 +258,42 @@
     (is (str/includes? source "resultProfile:'tagged-i64-i64-v1'"))
     (is (str/includes? source "const assertResultI64="))))
 
+(deftest parametric-result-validates-nested-payload-types-and-budgets
+  (let [text-result [:result :string :i64]
+        nested-result [:result :string [:result :i64 :bool]]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['text 'nested 'nested-error?]
+             :effects #{}
+             :functions
+             [{:name 'text :params ['r] :param-types [text-result]
+               :result :string :effects #{}
+               :body (list 'result-value-of text-result 'r "fallback")}
+              {:name 'nested :params [] :param-types [] :result nested-result :effects #{}
+               :body (list 'result-err-of nested-result
+                           (list 'result-ok-of [:result :i64 :bool] 7))}
+              {:name 'nested-error? :params ['r] :param-types [nested-result]
+               :result :bool :effects #{}
+               :body (list 'result-ok?-of [:result :i64 :bool]
+                           (list 'result-error-of nested-result 'r
+                                 (list 'result-err-of [:result :i64 :bool] false)))}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.text([true,'安全'])!=='安全'||x.text([false,9n])!=='fallback')process.exit(2);"
+                "const n=x.nested();if(n[0]!==false||n[1][0]!==true||n[1][1]!==7n||!Object.isFrozen(n[1]))process.exit(3);"
+                "if(x['nested-error?'](n)!==true)process.exit(4);"
+                "for(const bad of [[true,9n],[false,[true,'wrong']],[false,[true,7]]]){try{x['nested-error?'](bad);process.exit(5)}"
+                "catch(e){if(!['invalid-string','invalid-i64'].includes(e.message))process.exit(6)}}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "parametricAdtLimits:Object.freeze({depth:8,nodes:64})")))
+  (let [too-deep (nth (iterate (fn [t] [:result :i64 t]) :bool) 9)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"depth limit"
+                          (script/emit
+                           {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                            :functions [{:name 'bad :params ['x] :param-types [too-deep]
+                                         :result :bool :effects #{} :body true}]})))))
+
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil

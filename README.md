@@ -40,6 +40,14 @@ malformed/missing payloads fail closed, and `result-value` / `result-error`
 evaluate their fallback only for the opposite variant. This is a monomorphic
 ABI foundation, not yet a claim of generic ADTs.
 
+Parametric results use the canonical recursive type descriptor
+`[:result ok-type err-type]` and the explicit KIR operations
+`result-ok-of`, `result-err-of`, `result-ok?-of`, `result-value-of`, and
+`result-error-of`. Descriptors may nest to depth 8 and contain at most 64 type
+nodes; runtime payload validation carries the same depth and node budgets.
+Every constructor and projection carries its descriptor, so generated code
+never guesses a payload type from JavaScript shape.
+
 The first sequential collection profile is `vector<i64>`, bounded to 128
 items. Its host ABI is a frozen JavaScript array whose elements are revalidated
 as signed i64 at every exported boundary. `vector-get` has a lazy explicit

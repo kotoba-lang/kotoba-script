@@ -13,6 +13,29 @@
 (def ^:private max-keyword-bytes 512)
 (def ^:private max-map-entries 128)
 (def ^:private max-vector-items 128)
+(def ^:private max-type-depth 8)
+(def ^:private max-type-nodes 64)
+
+(declare fail!)
+
+(defn- validate-value-type!
+  ([type] (validate-value-type! type 0 (volatile! 0)))
+  ([type depth nodes]
+   (vswap! nodes inc)
+   (when (> @nodes max-type-nodes)
+     (fail! "KIR value type exceeds node limit" {:limit max-type-nodes}))
+   (when (> depth max-type-depth)
+     (fail! "KIR value type exceeds depth limit" {:limit max-type-depth}))
+   (cond
+     (contains? value-types type) type
+     (and (vector? type) (= 3 (count type)) (= :result (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         (validate-value-type! (nth type 2) (inc depth) nodes)
+         type)
+     :else (fail! "KIR value type is outside the safe profile" {:type type}))))
+
+(defn- parametric-result-type? [type]
+  (and (vector? type) (= 3 (count type)) (= :result (first type))))
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -44,6 +67,28 @@
 
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
+
+(declare validate-value-type! parametric-result-type?)
+
+(defn- type-js [type]
+  (validate-value-type! type)
+  (if (keyword? type)
+    (pr-str (name type))
+    (str "Object.freeze(['result'," (type-js (second type)) ","
+         (type-js (nth type 2)) "])")))
+
+(defn- guard-expr [type expression]
+  (if (parametric-result-type? type)
+    (str "assertParametricResult(" (type-js type) "," expression ")")
+    (str (case type
+           :string "assertString("
+           :keyword "assertKeyword("
+           :map "assertMap("
+           :bool "assertBool("
+           :option-i64 "assertOptionI64("
+           :result-i64 "assertResultI64("
+           :vector-i64 "assertVectorI64("
+           "assertI64(") expression ")")))
 
 (defn- utf8-byte-count
   "Count UTF-8 bytes while rejecting unpaired UTF-16 surrogates. Java's
@@ -87,8 +132,8 @@
                                   (every? #(and (symbol? %) (nil? (namespace %))) params)
                                   (= (count params) (count (distinct params)))
                                   (= (count params) (count types))
-                                  (every? value-types types)
-                                  (contains? value-types result-type))
+                                  (every? #(do (validate-value-type! %) true) types)
+                                  (do (validate-value-type! result-type) true))
                      (fail! "KIR function type signature is invalid" {:function name}))
                    [name {:params params :param-types types :result result-type}])))
           (:functions kir))))
@@ -300,6 +345,48 @@
              then-type)
         do (do (when (empty? args) (fail! "KIR do requires a value" {:node form}))
                (last (mapv #(infer-type % env signatures) args)))
+        result-ok-of
+        (let [[type payload] args]
+          (require-arity! op args 2)
+          (validate-value-type! type)
+          (when-not (parametric-result-type? type)
+            (fail! "result constructor requires [:result ok-type err-type]" {:type type}))
+          (require-type! (infer-type payload env signatures) (second type) payload)
+          type)
+        result-err-of
+        (let [[type payload] args]
+          (require-arity! op args 2)
+          (validate-value-type! type)
+          (when-not (parametric-result-type? type)
+            (fail! "result constructor requires [:result ok-type err-type]" {:type type}))
+          (require-type! (infer-type payload env signatures) (nth type 2) payload)
+          type)
+        result-ok?-of
+        (let [[type result] args]
+          (require-arity! op args 2)
+          (validate-value-type! type)
+          (when-not (parametric-result-type? type)
+            (fail! "result projection requires [:result ok-type err-type]" {:type type}))
+          (require-type! (infer-type result env signatures) type result)
+          :bool)
+        result-value-of
+        (let [[type result fallback] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (parametric-result-type? type)
+            (fail! "result projection requires [:result ok-type err-type]" {:type type}))
+          (require-type! (infer-type result env signatures) type result)
+          (require-type! (infer-type fallback env signatures) (second type) fallback)
+          (second type))
+        result-error-of
+        (let [[type result fallback] args]
+          (require-arity! op args 3)
+          (validate-value-type! type)
+          (when-not (parametric-result-type? type)
+            (fail! "result projection requires [:result ok-type err-type]" {:type type}))
+          (require-type! (infer-type result env signatures) type result)
+          (require-type! (infer-type fallback env signatures) (nth type 2) fallback)
+          (nth type 2))
         (infer-call-type op args env signatures)))
     :else (fail! "unsupported KIR node" {:node form})))
 
@@ -352,6 +439,16 @@
       (= op 'result-ok?) (str "assertResultI64(" (a (first args)) ")[0]")
       (= op 'result-value) (str "resultValue(" (a (first args)) ",()=>" (a (second args)) ")")
       (= op 'result-error) (str "resultError(" (a (first args)) ",()=>" (a (second args)) ")")
+      (= op 'result-ok-of) (str "makeParametricResult(" (type-js (first args)) ",true,"
+                                (a (second args)) ")")
+      (= op 'result-err-of) (str "makeParametricResult(" (type-js (first args)) ",false,"
+                                 (a (second args)) ")")
+      (= op 'result-ok?-of) (str "assertParametricResult(" (type-js (first args)) ","
+                                 (a (second args)) ")[0]")
+      (= op 'result-value-of) (str "parametricResultValue(" (type-js (first args)) ","
+                                   (a (second args)) ",()=>" (a (nth args 2)) ")")
+      (= op 'result-error-of) (str "parametricResultError(" (type-js (first args)) ","
+                                   (a (second args)) ",()=>" (a (nth args 2)) ")")
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
       (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
@@ -535,29 +632,11 @@
                                guards (apply str
                                              (map (fn [param type]
                                                     (str (js-name param) "="
-                                                         (case type
-                                                           :string "assertString("
-                                                           :keyword "assertKeyword("
-                                                           :map "assertMap("
-                                                           :bool "assertBool("
-                                                           :option-i64 "assertOptionI64("
-                                                           :result-i64 "assertResultI64("
-                                                           :vector-i64 "assertVectorI64("
-                                                           "assertI64(")
-                                                         (js-name param) ");"))
+                                                         (guard-expr type (js-name param)) ";"))
                                                   params param-types))]
                            (str "function " (js-name name) "("
                                 (str/join "," (map js-name params)) "){charge();" guards "return "
-                                (case result
-                                  :string "assertString("
-                                  :keyword "assertKeyword("
-                                  :map "assertMap("
-                                  :bool "assertBool("
-                                  :option-i64 "assertOptionI64("
-                                  :result-i64 "assertResultI64("
-                                  :vector-i64 "assertVectorI64("
-                                  "assertI64(")
-                                (emit-expr body env functions) ");}")))
+                                (guard-expr result (emit-expr body env functions)) ";}")))
                        (:functions kir)))
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
@@ -572,7 +651,9 @@
                (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"
                     ",vectorLimits:Object.freeze({items:" max-vector-items "})"
                     ",booleanProfile:'strict-v1',optionProfile:'tagged-i64-v1'"
-                    ",resultProfile:'tagged-i64-i64-v1'"))
+                    ",resultProfile:'tagged-i64-i64-v1'"
+                    ",parametricAdtLimits:Object.freeze({depth:" max-type-depth
+                    ",nodes:" max-type-nodes "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -601,6 +682,22 @@
              "throw new Error('invalid-result-i64');return v[0]?resultOk(v[1]):resultErr(v[1]);};"
              "const resultValue=(v,fallback)=>{v=assertResultI64(v);return v[0]?v[1]:assertI64(fallback());};"
              "const resultError=(v,fallback)=>{v=assertResultI64(v);return v[0]?assertI64(fallback()):v[1];};"
+             "const assertTypedValue=(t,v,d,s)=>{if(++s.nodes>" max-type-nodes
+             ")throw new Error('adt-node-limit');if(d>" max-type-depth
+             ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);"
+             "if(t==='string')return assertString(v);if(t==='keyword')return assertKeyword(v);"
+             "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
+             "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
+             "if(t==='vector-i64')return assertVectorI64(v);"
+             "if(!Array.isArray(t)||t.length!==3||t[0]!=='result'||!Array.isArray(v)||v.length!==2||typeof v[0]!=='boolean')"
+             "throw new Error('invalid-parametric-result');const p=v[0]?t[1]:t[2];"
+             "return Object.freeze([v[0],assertTypedValue(p,v[1],d+1,s)]);};"
+             "const assertParametricResult=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const makeParametricResult=(t,tag,payload)=>assertParametricResult(t,[tag,payload]);"
+             "const parametricResultValue=(t,v,fallback)=>{v=assertParametricResult(t,v);"
+             "return v[0]?v[1]:assertTypedValue(t[1],fallback(),1,{nodes:0});};"
+             "const parametricResultError=(t,v,fallback)=>{v=assertParametricResult(t,v);"
+             "return v[0]?assertTypedValue(t[2],fallback(),1,{nodes:0}):v[1];};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
              "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "if(Array.isArray(a)&&a.length===2&&Array.isArray(b)&&b.length===2){"
