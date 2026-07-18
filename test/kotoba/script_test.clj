@@ -1,6 +1,7 @@
 (ns kotoba.script-test
   (:require [clojure.test :refer [deftest is run-tests testing]]
             [clojure.java.shell :as shell]
+            [clojure.string :as str]
             [kotoba.script :as script])
   (:gen-class))
 
@@ -26,6 +27,25 @@
                              :functions [{:name 'main :params [] :body '(cap-call 7 4)}]})]
     (is (re-find #"requiredCapabilities:Object.freeze\(\[7\]\)" source))
     (is (re-find #"capability-denied" source))))
+
+(deftest module-graph-identity-is-frozen-into-the-esm-artifact
+  (let [a (apply str (repeat 64 "a"))
+        b (apply str (repeat 64 "b"))
+        c (apply str (repeat 64 "c"))
+        source (script/emit kir {:module-graph-digest a
+                                 :module-source-digests
+                                 {'example.text b 'example.app c}})]
+    (is (str/includes? source (str "moduleGraphDigest:\"" a "\"")))
+    (is (re-find #"moduleSourceDigests:Object.freeze\(\{\"example.app\":" source))
+    (is (< (.indexOf source "\"example.app\"") (.indexOf source "\"example.text\"")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"supplied together"
+                          (script/emit kir {:module-graph-digest a})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"canonical SHA-256"
+                          (script/emit kir {:module-graph-digest "bad"
+                                            :module-source-digests {'example.app c}})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"source digests are invalid"
+                          (script/emit kir {:module-graph-digest a
+                                            :module-source-digests {"example.app" c}})))))
 
 (deftest equality-is-comparison-and-grants-are-exact
   (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main :effects #{}

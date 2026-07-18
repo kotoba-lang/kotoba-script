@@ -300,10 +300,32 @@
                  (second effect))))
        sort vec))
 
+(defn- sha256? [value]
+  (and (string? value) (boolean (re-matches #"[0-9a-f]{64}" value))))
+
+(defn- module-seal-source [graph-digest source-digests]
+  (when (not= (some? graph-digest) (some? source-digests))
+    (fail! "module graph digest and source digests must be supplied together" {}))
+  (when graph-digest
+    (when-not (sha256? graph-digest)
+      (fail! "module graph digest is not canonical SHA-256" {}))
+    (when-not (and (map? source-digests) (pos? (count source-digests))
+                   (<= (count source-digests) 256)
+                   (every? symbol? (keys source-digests))
+                   (every? sha256? (vals source-digests)))
+      (fail! "module source digests are invalid" {}))
+    (str ",moduleGraphDigest:" (js-string graph-digest)
+         ",moduleSourceDigests:Object.freeze({"
+         (str/join "," (map (fn [[module digest]]
+                              (str (js-string (str module)) ":" (js-string digest)))
+                            (sort-by (comp str key) source-digests)))
+         "})")))
+
 (defn emit
   "Emit a restricted ESM string from checked `:kotoba.kir/v3` data."
   ([kir] (emit kir {}))
-  ([kir {:keys [source-digest kir-digest compiler-version]}]
+  ([kir {:keys [source-digest kir-digest compiler-version
+                module-graph-digest module-source-digests]}]
   (when-not (contains? supported-kir-formats (:format kir))
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
@@ -347,6 +369,7 @@
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
+             (module-seal-source module-graph-digest module-source-digests)
              ",requiredCapabilities:Object.freeze([" (str/join "," caps) "])});\n"
              "export function instantiateKotoba(grants=Object.freeze({})){\n"
              "const grantIds=Object.keys(grants).map(Number).sort((a,b)=>a-b);"
