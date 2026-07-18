@@ -120,7 +120,7 @@
       (do (require-arity! op args 2)
           (when-not (= (first types) (second types))
             (fail! "KIR equality operands have different types" {:types types :node args}))
-          (when-not (contains? #{:i64 :keyword :bool :option-i64} (first types))
+          (when-not (contains? #{:i64 :keyword :bool :option-i64 :vector-i64} (first types))
             (fail! "KIR equality type is unsupported" {:type (first types)}))
           :i64)
 
@@ -559,17 +559,19 @@
              "throw new Error('invalid-option-i64');return v[0]?optionSome(v[1]):optionNone;};"
              "const optionValue=(v,fallback)=>{v=assertOptionI64(v);return v[0]?v[1]:assertI64(fallback());};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)||Array.isArray(b)){"
+             "if((Array.isArray(a)&&typeof a[0]==='boolean')||(Array.isArray(b)&&typeof b[0]==='boolean')){"
              "a=assertOptionI64(a);b=assertOptionI64(b);return a[0]===b[0]&&(!a[0]||a[1]===b[1]);}"
+             "a=assertVectorI64(a);b=assertVectorI64(b);return a.length===b.length&&a.every((v,i)=>v===b[i]);}"
              "return a===b;};"
              "const makeVector=items=>{if(!Array.isArray(items))throw new Error('invalid-vector-i64');"
              "if(items.length>" max-vector-items ")throw new Error('vector-too-large');"
              "return Object.freeze(items.map(assertI64));};"
              "const assertVectorI64=v=>makeVector(v);"
-             "const vectorIndex=i=>{i=assertI64(i);if(i<0n||i>127n)throw new Error('vector-index-out-of-range');return Number(i);};"
-             "const vectorGet=(v,i,fallback)=>{v=assertVectorI64(v);i=vectorIndex(i);"
-             "return i<v.length?v[i]:assertI64(fallback());};"
-             "const vectorAssoc=(v,i,item)=>{v=assertVectorI64(v);i=vectorIndex(i);"
-             "if(i>=v.length)throw new Error('vector-index-out-of-range');const out=v.slice();out[i]=assertI64(item);return makeVector(out);};"
+             "const vectorGet=(v,i,fallback)=>{v=assertVectorI64(v);i=assertI64(i);"
+             "return i>=0n&&i<BigInt(v.length)?v[Number(i)]:assertI64(fallback());};"
+             "const vectorAssoc=(v,i,item)=>{v=assertVectorI64(v);i=assertI64(i);"
+             "if(i<0n||i>=BigInt(v.length))throw new Error('vector-index-out-of-range');"
+             "const out=v.slice();out[Number(i)]=assertI64(item);return makeVector(out);};"
              "const vectorConj=(v,item)=>{v=assertVectorI64(v);if(v.length>=" max-vector-items
              ")throw new Error('vector-too-large');return makeVector([...v,assertI64(item)]);};"
              "const utf8Bytes=s=>{let n=0;for(let i=0;i<s.length;i++){const u=s.charCodeAt(i);"
