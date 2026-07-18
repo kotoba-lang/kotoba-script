@@ -103,11 +103,6 @@
 (defn- record-type? [type]
   (and (vector? type) (= 3 (count type)) (= :record (first type))))
 
-(def ^:private forbidden-output
-  [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
-   #"\bdocument\b" #"\bprocess\b" #"\brequire\s*\(" #"\bimport\s*\("
-   #"__proto__" #"\.constructor\b"])
-
 (def ^:private forbidden-global-names
   #{"eval" "Function" "globalThis" "window" "document" "self" "process" "require"})
 
@@ -929,9 +924,11 @@
         qname (when (.isGetProp node) (.getQualifiedName node))
         property (cond
                    qname (last (str/split qname #"\\."))
+                   (.isGetProp node) (.getString node)
                    (and (.isGetElem node)
                         (some-> node .getLastChild .isStringLit))
-                   (some-> node .getLastChild .getString))]
+                   (some-> node .getLastChild .getString)
+                   (.isStringKey node) (.getString node))]
     (cond
       (and (.isName node) (contains? forbidden-global-names (.getString node)))
       {:kind :ambient-global :name (.getString node)}
@@ -946,12 +943,11 @@
 
 (defn verify-output!
   "Parse generated JavaScript and fail closed on ambient-authority AST nodes.
-  Regexes remain only as defense-in-depth for spellings rejected before parse."
+  Verification is syntax-aware so safe names, comments, and string values do
+  not become false positives. Escaped identifiers are normalized by parsing."
   [source]
   (when-not (string? source)
     (fail! "generated output is not text" {}))
-  (when-let [pattern (some #(when (re-find % source) %) forbidden-output)]
-    (fail! "generated JavaScript violates restricted subset" {:pattern (str pattern)}))
   (let [compiler (com.google.javascript.jscomp.Compiler.)
         options (doto (CompilerOptions.)
                   (.setLanguageIn CompilerOptions$LanguageMode/ECMASCRIPT_NEXT)

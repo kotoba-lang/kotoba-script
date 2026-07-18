@@ -608,8 +608,8 @@
                              :functions [{:name 'main :params [] :body '(fetch 1)}]}))))
 
 (deftest ast-verifier-rejects-obfuscated-ambient-authority
-  ;; The source spelling avoids the defense-in-depth regex; parsing must still
-  ;; normalize it to the forbidden `globalThis` identifier.
+  ;; Parsing normalizes the escaped spelling to the forbidden `globalThis`
+  ;; identifier before the authority check.
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #"AST violates restricted subset"
                         (script/verify-output!
@@ -618,6 +618,31 @@
                (script/verify-output! "export const x=({}).constructor;")))
   (is (thrown? clojure.lang.ExceptionInfo
                (script/verify-output! "export const x=import('x');"))))
+
+(deftest verifier-distinguishes-generated-identifiers-from-ambient-authority
+  (let [kir {:format :kotoba.kir/v3 :entry nil :exports ['within-window]
+             :effects #{}
+             :functions
+             [{:name 'within-window
+               :params ['window-ms 'document-count 'process-id]
+               :param-types [:i64 :i64 :i64]
+               :result :i64
+               :effects #{}
+               :body '(if (<= document-count window-ms) process-id 0)}]}
+        source (script/emit kir)]
+    (is (string? source))
+    (is (str/includes? source "k$window$002dms"))
+    (is (str/includes? source "k$document$002dcount"))
+    (is (str/includes? source "k$process$002did")))
+  (is (= "export const x='window document process globalThis';"
+         (script/verify-output!
+          "export const x='window document process globalThis';")))
+  (doseq [source ["export const x=window;"
+                  "export const x=document;"
+                  "export const x=process;"
+                  "export const x={'__proto__':1};"]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (script/verify-output! source)))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
