@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f32-f64-v1" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v1'"))
+    (is (= "ieee-754-f32-f64-v2" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v2'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -176,6 +176,37 @@
                      "if(x['to-i64'](one)!==1n||x.truncating(x.rounded(1.9))!==1n)process.exit(10);"
                      "try{x['to-i64'](tenth);process.exit(11)}catch(e){}})"
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest floating-sqrt-min-max-have-sealed-special-value-semantics
+  (let [kir {:format :kotoba.kir/v4 :entry nil
+             :exports ['f32-s 'f32-lo 'f32-hi 'f64-s 'f64-lo 'f64-hi]
+             :effects #{}
+             :functions
+             [{:name 'f32-s :params ['x] :param-types [:f32] :result :f32
+               :effects #{} :body '(f32-sqrt x)}
+              {:name 'f32-lo :params ['x 'y] :param-types [:f32 :f32] :result :f32
+               :effects #{} :body '(f32-min x y)}
+              {:name 'f32-hi :params ['x 'y] :param-types [:f32 :f32] :result :f32
+               :effects #{} :body '(f32-max x y)}
+              {:name 'f64-s :params ['x] :param-types [:f64] :result :f64
+               :effects #{} :body '(f64-sqrt x)}
+              {:name 'f64-lo :params ['x 'y] :param-types [:f64 :f64] :result :f64
+               :effects #{} :body '(f64-min x y)}
+              {:name 'f64-hi :params ['x 'y] :param-types [:f64 :f64] :result :f64
+               :effects #{} :body '(f64-max x y)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({}),p=Math.fround(0),n=Math.fround(-0);"
+                     "if(x['f32-s'](Math.fround(4))!==2||!Number.isNaN(x['f32-s'](Math.fround(-1))))process.exit(2);"
+                     "if(!Object.is(x['f32-lo'](p,n),-0)||!Object.is(x['f32-hi'](p,n),0))process.exit(3);"
+                     "if(!Number.isNaN(x['f32-lo'](NaN,p))||!Number.isNaN(x['f32-hi'](p,NaN)))process.exit(4);"
+                     "if(x['f64-s'](4)!==2||!Number.isNaN(x['f64-s'](-1)))process.exit(5);"
+                     "if(!Object.is(x['f64-lo'](0,-0),-0)||!Object.is(x['f64-hi'](0,-0),0))process.exit(6);"
+                     "if(!Number.isNaN(x['f64-lo'](NaN,0))||!Number.isNaN(x['f64-hi'](0,NaN)))process.exit(7)})"))]
     (is (zero? (:exit result)) (:err result))))
 
 (deftest capabilities-fail-closed
