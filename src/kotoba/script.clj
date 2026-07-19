@@ -6,7 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def supported-kir-format :kotoba.kir/v3)
+(def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 
 (def ^:private forbidden-output
   [#"\beval\s*\(" #"\bFunction\s*\(" #"\bglobalThis\b" #"\bwindow\b"
@@ -36,8 +36,25 @@
     (fail! "KIR literal is not an integer" {:node n}))
   (str n "n"))
 
+(defn- f64-literal [n]
+  (when-not (instance? Double n)
+    (fail! "KIR literal is not f64" {:node n}))
+  (cond
+    (Double/isNaN n) "Number.NaN"
+    (= Double/POSITIVE_INFINITY n) "Number.POSITIVE_INFINITY"
+    (= Double/NEGATIVE_INFINITY n) "Number.NEGATIVE_INFINITY"
+    (= Long/MIN_VALUE (Double/doubleToRawLongBits n)) "-0"
+    :else (str (Double/toString n))))
+
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
+
+(defn- js-value-validator [type expression]
+  (case type
+    :i64 (str "validateI64(" expression ")")
+    :string (str "validateString(" expression ")")
+    :f64 (str "validateF64(" expression ")")
+    (fail! "unsupported KIR value type" {:type type})))
 
 (declare emit-expr)
 
@@ -59,6 +76,11 @@
       (= op 'pair-first) (str (a (first args)) "[0]")
       (= op 'pair-second) (str (a (first args)) "[1]")
       (= op 'cap-call) (str "callCapability(" (first args) "," (a (second args)) ")")
+      (= op 'string-byte-length) (str "utf8Length(" (a (first args)) ")")
+      (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
+      (= op 'string-concat) (str "boundedString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'f64-to-bits) (str "f64ToBits(" (a (first args)) ")")
+      (= op 'f64-from-bits) (str "f64FromBits(" (a (first args)) ")")
       (contains? functions op)
       (str (js-name op) "(" (str/join "," (map a args)) ")")
       :else (fail! "unsupported KIR operation" {:operation op}))))
@@ -66,6 +88,8 @@
 (defn emit-expr [form env functions]
   (cond
     (integer? form) (bigint-literal form)
+    (instance? Double form) (f64-literal form)
+    (string? form) (pr-str form)
     (symbol? form) (or (get env form)
                        (fail! "unbound KIR symbol" {:symbol form}))
     (seq? form)
@@ -150,26 +174,44 @@
   "Emit a restricted ESM string from checked `:kotoba.kir/v3` data."
   ([kir] (emit kir {}))
   ([kir {:keys [source-digest kir-digest compiler-version]}]
-  (when-not (= supported-kir-format (:format kir))
+  (when-not (contains? supported-kir-formats (:format kir))
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
         functions (set function-names)
         entry (:entry kir)
-        _ (when-not (contains? functions entry)
+        _ (when (and entry (not (contains? functions entry)))
             (fail! "KIR entry is missing" {:entry entry}))
+        exports (or (:exports kir) function-names)
+        _ (when-not (every? functions exports)
+            (fail! "KIR export is missing" {:exports exports}))
         caps (capability-ids kir)
+        typed-values? (= :kotoba.kir/v4 (:format kir))
         function-source
         (str/join "\n"
-                  (map (fn [{:keys [name params body]}]
-                         (let [env (into {} (map (juxt identity js-name) params))]
+                  (map (fn [{:keys [name params param-types result body]}]
+                         (let [env (into {} (map (juxt identity js-name) params))
+                               parameter-types (or param-types (vec (repeat (count params) :i64)))
+                               validation-source
+                               (when typed-values?
+                                 (apply str
+                                        (map (fn [parameter type]
+                                               (str (js-value-validator type (js-name parameter)) ";"))
+                                             params parameter-types)))
+                               expression (emit-expr body env functions)]
                            (str "function " (js-name name) "("
-                                (str/join "," (map js-name params)) "){charge();return "
-                                (emit-expr body env functions) ";}")))
+                                (str/join "," (map js-name params)) "){charge();"
+                                validation-source
+                                (if typed-values?
+                                  (str "const k$result=" expression ";return "
+                                       (js-value-validator (or result :i64) "k$result") ";}")
+                                  (str "return " expression ";}")))))
                        (:functions kir)))
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
-             "',kirFormat:'" (name supported-kir-format) "',entry:'" entry
-             "',sourceDigest:" (js-string source-digest)
+             "',kirFormat:'" (name (:format kir)) "',entry:"
+             (if entry (str "'" entry "'") "null")
+             ",valueProfile:'" (if typed-values? "typed-v1" "i64-v1") "'"
+             ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
              ",requiredCapabilities:Object.freeze([" (str/join "," caps) "])});\n"
@@ -179,11 +221,25 @@
              "if(grantIds.length!==required.length||grantIds.some((v,i)=>v!==required[i]))"
              "throw new Error('capability-grant-mismatch');"
              "const i64=n=>BigInt.asIntN(64,n);let fuel=256;"
+             "const validateI64=n=>{if(typeof n!=='bigint'||BigInt.asIntN(64,n)!==n)throw new Error('invalid-i64-value');return n;};"
+             "const validateF64=n=>{if(typeof n!=='number')throw new Error('invalid-f64-value');return n;};"
+             "const f64Buffer=new ArrayBuffer(8);const f64View=new DataView(f64Buffer);"
+             "const f64ToBits=n=>{validateF64(n);if(Number.isNaN(n))return 9221120237041090560n;"
+             "f64View.setFloat64(0,n,true);return f64View.getBigInt64(0,true);};"
+             "const f64FromBits=n=>{validateI64(n);f64View.setBigInt64(0,n,true);const x=f64View.getFloat64(0,true);"
+             "return Number.isNaN(x)?Number.NaN:x;};"
+             "const utf8Bytes=s=>{if(typeof s!=='string')throw new Error('invalid-string-value');let n=0;"
+             "for(let i=0;i<s.length;i++){const u=s.charCodeAt(i);if(u<=127)n++;else if(u<=2047)n+=2;"
+             "else if(u>=55296&&u<=56319){if(i+1>=s.length)throw new Error('invalid-string-value');"
+             "const v=s.charCodeAt(++i);if(v<56320||v>57343)throw new Error('invalid-string-value');n+=4;}"
+             "else if(u>=56320&&u<=57343)throw new Error('invalid-string-value');else n+=3;}return n;};"
+             "const validateString=s=>{if(utf8Bytes(s)>65536)throw new Error('invalid-string-value');return s;};"
+             "const boundedString=validateString;const utf8Length=s=>BigInt(utf8Bytes(validateString(s)));"
              "const charge=()=>{fuel--;if(fuel<0)throw new Error('fuel-exhausted');};"
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"
              "if(a===-9223372036854775808n&&b===-1n)throw new Error('signed-division-overflow');return a/b;};"
              "const callCapability=(id,value)=>{const f=grants[id];"
              "if(typeof f!=='function')throw new Error('capability-denied:'+id);return i64(BigInt(f(value)));};\n"
              function-source "\n"
-             "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (js-name f))) function-names)) "});\n}\n")]
+             "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (js-name f))) exports)) "});\n}\n")]
     (verify-output! source))))

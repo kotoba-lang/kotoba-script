@@ -52,6 +52,53 @@
   (is (thrown? clojure.lang.ExceptionInfo
                (script/verify-output! "export const x=import('x');"))))
 
+(deftest typed-exports-validate-values-and-preserve-bounded-strings
+  (let [source (script/emit
+                {:format :kotoba.kir/v4 :entry nil :exports ['greet 'bytes]
+                 :effects #{}
+                 :functions
+                 [{:name 'greet :params ['name] :param-types [:string] :result :string
+                   :body '(string-concat "こんにちは、" name)}
+                  {:name 'bytes :params ['value] :param-types [:string] :result :i64
+                   :body '(string-byte-length value)}]})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.greet('世界')!=='こんにちは、世界')process.exit(2);"
+                "if(x.bytes('😀')!==4n)process.exit(3);"
+                "for(const bad of [()=>x.greet(1n),()=>x.bytes('\\uD800'),()=>x.greet('x'.repeat(65537))]){"
+                "try{bad();process.exit(4)}catch(e){}}console.log('typed-ok')})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (= "typed-ok\n" (:out result)))
+    (is (re-find #"validateString" source))
+    (is (re-find #"validateI64" source))))
+
+(deftest typed-f64-exports-preserve-ieee-bits
+  (let [source (script/emit
+                {:format :kotoba.kir/v4 :entry nil :exports ['bits 'from-bits 'negative-zero]
+                 :effects #{}
+                 :functions
+                 [{:name 'bits :params ['value] :param-types [:f64] :result :i64
+                   :body '(f64-to-bits value)}
+                  {:name 'from-bits :params ['value] :param-types [:i64] :result :f64
+                   :body '(f64-from-bits value)}
+                  {:name 'negative-zero :params [] :param-types [] :result :f64
+                   :body -0.0}]})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.bits(1.5)!==4609434218613702656n)process.exit(2);"
+                "if(!Object.is(x.fromBits?x.fromBits(0n):x['from-bits'](0n),0))process.exit(3);"
+                "if(!Object.is(x['negative-zero'](),-0))process.exit(4);"
+                "if(x.bits(Number.NaN)!==9221120237041090560n)process.exit(5);"
+                "try{x.bits(1n);process.exit(6)}catch(e){}console.log('f64-ok')})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (= "f64-ok\n" (:out result)))
+    (is (re-find #"f64ToBits" source))
+    (is (re-find #"validateF64" source))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
     (System/exit (if (pos? (+ fail error)) 1 0))))
