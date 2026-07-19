@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f32-f64-v6" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v6'"))
+    (is (= "ieee-754-f32-f64-v7" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v7'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -296,6 +296,30 @@
                      "if(!Object.is(f(-0,1),-0)||f(0,-1)!==Math.PI||f(-0,-1)!==-Math.PI)process.exit(3);"
                      "for(const p of [[NaN,1],[1,NaN],[Infinity,1],[1,-Infinity]])try{f(...p);process.exit(4)}"
                      "catch(e){if(e.message!=='f64-atan2-bounded-domain')process.exit(5)}})"
+                     ".catch(e=>{console.error(e.message);process.exit(99)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest wide-exp-and-log-use-fixed-binary-scaling
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['exp 'log] :effects #{}
+             :functions [{:name 'exp :params ['x] :param-types [:f64] :result :f64
+                          :effects #{} :body '(f64-exp-bounded x)}
+                         {:name 'log :params ['x] :param-types [:f64] :result :f64
+                          :effects #{} :body '(f64-log-bounded x)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({}),limit=512*Math.LN2;"
+                     "for(let i=0;i<=128;i++){const v=-limit+2*limit*i/128,a=x.exp(v),b=Math.exp(v);"
+                     "if(Math.abs(a-b)/b>1e-13)process.exit(2);}"
+                     "for(let i=-512;i<=512;i+=8){const v=2**i;"
+                     "if(Math.abs(x.log(v)-Math.log(v))>1e-13)process.exit(3);}"
+                     "if(x.exp(0)!==1||!Object.is(x.log(1),0))process.exit(4);"
+                     "for(const [f,vals,msg] of [[x.exp,[NaN,Infinity,-Infinity,limit+Number.EPSILON*limit],"
+                     "'f64-exp-bounded-domain'],[x.log,[NaN,Infinity,-Infinity,0,2**-513,2**513],"
+                     "'f64-log-bounded-domain']])for(const v of vals)try{f(v);process.exit(5)}catch(e){"
+                     "if(e.message!==msg)process.exit(6)}})"
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
