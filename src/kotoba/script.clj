@@ -6,7 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "ieee-754-f32-f64-v3")
+(def floating-point-policy "ieee-754-f32-f64-v4")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
@@ -415,6 +415,10 @@
           (require-type! (first types) :f64 (first args))
           :f64)
       (contains? '#{f64-sin-quarter-turn f64-cos-quarter-turn} op)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :f64 (first args))
+          :f64)
+      (contains? '#{f64-sin-bounded f64-cos-bounded} op)
       (do (require-arity! op args 1)
           (require-type! (first types) :f64 (first args))
           :f64)
@@ -1053,6 +1057,8 @@
       (= op 'f64-max) (str "Math.max(" (a (first args)) "," (a (second args)) ")")
       (= op 'f64-sin-quarter-turn) (str "f64SinQuarterTurn(" (a (first args)) ")")
       (= op 'f64-cos-quarter-turn) (str "f64CosQuarterTurn(" (a (first args)) ")")
+      (= op 'f64-sin-bounded) (str "f64SinBounded(" (a (first args)) ")")
+      (= op 'f64-cos-bounded) (str "f64CosBounded(" (a (first args)) ")")
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
       (let [operator ({'f64-eq "===" 'f64-lt "<" 'f64-le "<=" 'f64-gt ">" 'f64-ge ">="} op)]
         (str "(" (a (first args)) operator (a (second args)) ")"))
@@ -1303,6 +1309,17 @@
              "p=2.08767569878681e-9+z*p;p=-2.755731922398589e-7+z*p;"
              "p=0.0000248015873015873+z*p;p=-0.001388888888888889+z*p;"
              "p=0.041666666666666664+z*p;p=-0.5+z*p;return 1+z*p;};"
+             "const reduceBoundedAngle=v=>{v=assertF64(v);if(!Number.isFinite(v)||Math.abs(v)>25735.927018207585)"
+             "throw new Error('f64-bounded-angle-domain');const s=v*0.6366197723675814;"
+             "const n=s>=0?Math.floor(s+0.5):Math.ceil(s-0.5);"
+             "const r=(v-n*1.5707963267948966)-n*6.123233995736766e-17;"
+             "return [r,((n%4)+4)%4];};"
+             "const f64SinBounded=v=>{const [r,q]=reduceBoundedAngle(v);"
+             "if(q===0)return f64SinQuarterTurn(r);if(q===1)return f64CosQuarterTurn(r);"
+             "if(q===2)return -f64SinQuarterTurn(r);return -f64CosQuarterTurn(r);};"
+             "const f64CosBounded=v=>{const [r,q]=reduceBoundedAngle(v);"
+             "if(q===0)return f64CosQuarterTurn(r);if(q===1)return -f64SinQuarterTurn(r);"
+             "if(q===2)return -f64CosQuarterTurn(r);return f64SinQuarterTurn(r);};"
              "const f32Buffer=new ArrayBuffer(4),f32View=new DataView(f32Buffer);"
              "const f32ToBits=v=>{v=assertF32(v);if(Number.isNaN(v))return 2143289344n;"
              "f32View.setFloat32(0,v,true);return BigInt(f32View.getInt32(0,true));};"
