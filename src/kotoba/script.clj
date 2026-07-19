@@ -34,9 +34,7 @@
      (fail! "KIR value type exceeds depth limit" {:limit max-type-depth}))
    (cond
      (contains? value-types type)
-     (do (when (and (contains? #{:f32 :f64} type) (pos? depth))
-           (fail! "floating values are admitted only as scalars" {:type type}))
-         type)
+     type
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
