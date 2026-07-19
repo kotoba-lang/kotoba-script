@@ -6,7 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "ieee-754-f32-f64-v2")
+(def floating-point-policy "ieee-754-f32-f64-v3")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
@@ -411,6 +411,10 @@
           (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
           :f64)
       (contains? '#{f64-neg f64-abs f64-sqrt} op)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :f64 (first args))
+          :f64)
+      (contains? '#{f64-sin-quarter-turn f64-cos-quarter-turn} op)
       (do (require-arity! op args 1)
           (require-type! (first types) :f64 (first args))
           :f64)
@@ -1047,6 +1051,8 @@
       (= op 'f64-sqrt) (str "Math.sqrt(" (a (first args)) ")")
       (= op 'f64-min) (str "Math.min(" (a (first args)) "," (a (second args)) ")")
       (= op 'f64-max) (str "Math.max(" (a (first args)) "," (a (second args)) ")")
+      (= op 'f64-sin-quarter-turn) (str "f64SinQuarterTurn(" (a (first args)) ")")
+      (= op 'f64-cos-quarter-turn) (str "f64CosQuarterTurn(" (a (first args)) ")")
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
       (let [operator ({'f64-eq "===" 'f64-lt "<" 'f64-le "<=" 'f64-gt ">" 'f64-ge ">="} op)]
         (str "(" (a (first args)) operator (a (second args)) ")"))
@@ -1285,6 +1291,18 @@
              "throw new Error('inexact-f64-to-i64');return checkedI64Range(BigInt(v));};"
              "const f64ToI64Truncating=v=>{v=assertF64(v);if(!Number.isFinite(v))"
              "throw new Error('invalid-f64-to-i64');return checkedI64Range(BigInt(Math.trunc(v)));};"
+             "const assertQuarterTurn=v=>{v=assertF64(v);if(!Number.isFinite(v)||Math.abs(v)>0.7853981633974483)"
+             "throw new Error('f64-quarter-turn-domain');return v;};"
+             "const f64SinQuarterTurn=v=>{v=assertQuarterTurn(v);if(v===0)return v;const z=v*v;"
+             "let p=2.8114572543455206e-15;p=-7.647163731819816e-13+z*p;"
+             "p=1.6059043836821613e-10+z*p;p=-2.505210838544172e-8+z*p;"
+             "p=2.7557319223985893e-6+z*p;p=-0.0001984126984126984+z*p;"
+             "p=0.008333333333333333+z*p;p=-0.16666666666666666+z*p;return v+(v*z)*p;};"
+             "const f64CosQuarterTurn=v=>{v=assertQuarterTurn(v);const z=v*v;"
+             "let p=4.779477332387385e-14;p=-1.1470745597729725e-11+z*p;"
+             "p=2.08767569878681e-9+z*p;p=-2.755731922398589e-7+z*p;"
+             "p=0.0000248015873015873+z*p;p=-0.001388888888888889+z*p;"
+             "p=0.041666666666666664+z*p;p=-0.5+z*p;return 1+z*p;};"
              "const f32Buffer=new ArrayBuffer(4),f32View=new DataView(f32Buffer);"
              "const f32ToBits=v=>{v=assertF32(v);if(Number.isNaN(v))return 2143289344n;"
              "f32View.setFloat32(0,v,true);return BigInt(f32View.getInt32(0,true));};"

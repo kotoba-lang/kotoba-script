@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f32-f64-v2" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v2'"))
+    (is (= "ieee-754-f32-f64-v3" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v3'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -207,6 +207,29 @@
                      "if(x['f64-s'](4)!==2||!Number.isNaN(x['f64-s'](-1)))process.exit(5);"
                      "if(!Object.is(x['f64-lo'](0,-0),-0)||!Object.is(x['f64-hi'](0,-0),0))process.exit(6);"
                      "if(!Number.isNaN(x['f64-lo'](NaN,0))||!Number.isNaN(x['f64-hi'](0,NaN)))process.exit(7)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest bounded-trigonometry-has-a-deterministic-error-contract
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['sin 'cos] :effects #{}
+             :functions
+             [{:name 'sin :params ['x] :param-types [:f64] :result :f64
+               :effects #{} :body '(f64-sin-quarter-turn x)}
+              {:name 'cos :params ['x] :param-types [:f64] :result :f64
+               :effects #{} :body '(f64-cos-quarter-turn x)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({}),q=Math.PI/4;"
+                     "if(x.sin(q)!==0.7071067811865475||x.cos(q)!==0.7071067811865476)process.exit(2);"
+                     "if(!Object.is(x.sin(-0),-0)||x.cos(-0)!==1)process.exit(3);"
+                     "for(let i=0;i<=128;i++){const v=-q+2*q*i/128;"
+                     "if(Math.abs(x.sin(v)-Math.sin(v))>4e-15||Math.abs(x.cos(v)-Math.cos(v))>4e-15)process.exit(4);}"
+                     "for(const v of [NaN,Infinity,-Infinity,q+Number.EPSILON,-q-Number.EPSILON])"
+                     "{for(const f of [x.sin,x.cos]){try{f(v);process.exit(5)}catch(e){"
+                     "if(e.message!=='f64-quarter-turn-domain')process.exit(6)}}}})"
+                     ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
 (deftest capabilities-fail-closed
