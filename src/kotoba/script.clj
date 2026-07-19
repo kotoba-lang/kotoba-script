@@ -6,9 +6,9 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "ieee-754-f64-conversions-v1")
+(def floating-point-policy "ieee-754-f32-f64-v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+(def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
@@ -34,8 +34,8 @@
      (fail! "KIR value type exceeds depth limit" {:limit max-type-depth}))
    (cond
      (contains? value-types type)
-     (do (when (and (= type :f64) (pos? depth))
-           (fail! "f64 is admitted only as a scalar" {:type type}))
+     (do (when (and (contains? #{:f32 :f64} type) (pos? depth))
+           (fail! "floating values are admitted only as scalars" {:type type}))
          type)
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
@@ -189,6 +189,7 @@
           (canonical-typed-map-type? type) (record-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
+           :f32 "assertF32("
            :f64 "assertF64("
            :string "assertString("
            :keyword "assertKeyword("
@@ -385,6 +386,26 @@
       (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :f64)
       (contains? '#{f64-to-i64-checked f64-to-i64-truncating} op)
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
+      (= op 'f32-to-bits)
+      (do (require-arity! op args 1) (require-type! (first types) :f32 (first args)) :i64)
+      (= op 'f32-from-bits)
+      (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :f32)
+      (= op 'f64-to-f32-rounded)
+      (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :f32)
+      (= op 'f32-to-f64-exact)
+      (do (require-arity! op args 1) (require-type! (first types) :f32 (first args)) :f64)
+      (contains? '#{i64-to-f32-checked i64-to-f32-rounded} op)
+      (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :f32)
+      (contains? '#{f32-to-i64-checked f32-to-i64-truncating} op)
+      (do (require-arity! op args 1) (require-type! (first types) :f32 (first args)) :i64)
+      (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :f32 arg)) :f32)
+      (contains? '#{f32-neg f32-abs} op)
+      (do (require-arity! op args 1) (require-type! (first types) :f32 (first args)) :f32)
+      (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge f32-unordered} op)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :f32 arg)) :bool)
       (contains? '#{f64-add f64-sub f64-mul f64-div} op)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
@@ -997,6 +1018,24 @@
       (= op 'i64-to-f64-rounded) (str "i64ToF64Rounded(" (a (first args)) ")")
       (= op 'f64-to-i64-checked) (str "f64ToI64Checked(" (a (first args)) ")")
       (= op 'f64-to-i64-truncating) (str "f64ToI64Truncating(" (a (first args)) ")")
+      (= op 'f32-to-bits) (str "f32ToBits(" (a (first args)) ")")
+      (= op 'f32-from-bits) (str "f32FromBits(" (a (first args)) ")")
+      (= op 'f64-to-f32-rounded) (str "f64ToF32Rounded(" (a (first args)) ")")
+      (= op 'f32-to-f64-exact) (str "f32ToF64Exact(" (a (first args)) ")")
+      (= op 'i64-to-f32-checked) (str "i64ToF32Checked(" (a (first args)) ")")
+      (= op 'i64-to-f32-rounded) (str "i64ToF32Rounded(" (a (first args)) ")")
+      (= op 'f32-to-i64-checked) (str "f32ToI64Checked(" (a (first args)) ")")
+      (= op 'f32-to-i64-truncating) (str "f32ToI64Truncating(" (a (first args)) ")")
+      (contains? '#{f32-add f32-sub f32-mul f32-div} op)
+      (let [operator ({'f32-add "+" 'f32-sub "-" 'f32-mul "*" 'f32-div "/"} op)]
+        (str "Math.fround(" (a (first args)) operator (a (second args)) ")"))
+      (= op 'f32-neg) (str "Math.fround(-" (a (first args)) ")")
+      (= op 'f32-abs) (str "Math.fround(Math.abs(" (a (first args)) "))")
+      (contains? '#{f32-eq f32-lt f32-le f32-gt f32-ge} op)
+      (let [operator ({'f32-eq "===" 'f32-lt "<" 'f32-le "<=" 'f32-gt ">" 'f32-ge ">="} op)]
+        (str "(" (a (first args)) operator (a (second args)) ")"))
+      (= op 'f32-unordered)
+      (str "(Number.isNaN(" (a (first args)) ")||Number.isNaN(" (a (second args)) "))")
       (contains? '#{f64-add f64-sub f64-mul f64-div} op)
       (let [operator ({'f64-add "+" 'f64-sub "-" 'f64-mul "*" 'f64-div "/"} op)]
         (str "assertF64(" (a (first args)) operator (a (second args)) ")"))
@@ -1224,6 +1263,8 @@
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
              "const assertF64=v=>{if(typeof v!=='number')throw new Error('invalid-f64');return v;};"
+             "const assertF32=v=>{if(typeof v!=='number'||!Object.is(Math.fround(v),v))"
+             "throw new Error('invalid-f32');return v;};"
              "const f64Buffer=new ArrayBuffer(8);const f64View=new DataView(f64Buffer);"
              "const f64ToBits=v=>{v=assertF64(v);if(Number.isNaN(v))return 9221120237041090560n;"
              "f64View.setFloat64(0,v,true);return f64View.getBigInt64(0,true);};"
@@ -1238,6 +1279,21 @@
              "throw new Error('inexact-f64-to-i64');return checkedI64Range(BigInt(v));};"
              "const f64ToI64Truncating=v=>{v=assertF64(v);if(!Number.isFinite(v))"
              "throw new Error('invalid-f64-to-i64');return checkedI64Range(BigInt(Math.trunc(v)));};"
+             "const f32Buffer=new ArrayBuffer(4),f32View=new DataView(f32Buffer);"
+             "const f32ToBits=v=>{v=assertF32(v);if(Number.isNaN(v))return 2143289344n;"
+             "f32View.setFloat32(0,v,true);return BigInt(f32View.getInt32(0,true));};"
+             "const f32FromBits=v=>{v=assertI64(v);if(v<-2147483648n||v>2147483647n)"
+             "throw new Error('invalid-f32-bits');f32View.setInt32(0,Number(v),true);"
+             "const n=f32View.getFloat32(0,true);return Number.isNaN(n)?Number.NaN:n;};"
+             "const f64ToF32Rounded=v=>Math.fround(assertF64(v));"
+             "const f32ToF64Exact=v=>assertF32(v);"
+             "const i64ToF32Rounded=v=>Math.fround(Number(assertI64(v)));"
+             "const i64ToF32Checked=v=>{v=assertI64(v);const n=i64ToF32Rounded(v);"
+             "if(BigInt(n)!==v)throw new Error('inexact-i64-to-f32');return n;};"
+             "const f32ToI64Checked=v=>{v=assertF32(v);if(!Number.isFinite(v)||!Number.isInteger(v))"
+             "throw new Error('inexact-f32-to-i64');return checkedI64Range(BigInt(v));};"
+             "const f32ToI64Truncating=v=>{v=assertF32(v);if(!Number.isFinite(v))"
+             "throw new Error('invalid-f32-to-i64');return checkedI64Range(BigInt(Math.trunc(v)));};"
              "const assertBool=v=>{if(typeof v!=='boolean')throw new Error('invalid-bool');return v;};"
              "const optionNone=Object.freeze([false]);"
              "const optionSome=v=>Object.freeze([true,assertI64(v)]);"
@@ -1255,7 +1311,7 @@
              "const sameType=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((x,i)=>sameType(x,b[i])));"
              "const assertTypedValue=(t,v,d,s)=>{if(++s.nodes>" max-type-nodes
              ")throw new Error('adt-node-limit');if(d>" max-type-depth
-             ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);if(t==='f64')return assertF64(v);"
+             ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);if(t==='f32')return assertF32(v);if(t==='f64')return assertF64(v);"
              "if(t==='string')return assertString(v);if(t==='keyword')return assertKeyword(v);"
              "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"

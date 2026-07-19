@@ -14,15 +14,17 @@ They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.
 
 Every emitted artifact declares
-`floatingPointPolicy: 'ieee-754-f64-conversions-v1'`. KIR v4 admits `:f64`
-parameters, results, literals, exact bit conversion, explicit add/subtract/
-multiply/divide/negate/absolute operations, ordered comparisons, and an
-unordered predicate. Finite values,
-infinities, and both zero signs preserve their IEEE-754 binary64 bits; NaN
-payloads are intentionally unobservable and canonicalized to quiet NaN
-`0x7ff8000000000000`. Division follows IEEE-754, including infinities, NaN,
-and signed zero. There are no implicit integer/float conversions, fused
-operations, remainder, square root, or transcendentals in this profile.
+`floatingPointPolicy: 'ieee-754-f32-f64-v1'`. KIR v4 admits scalar `:f32` and
+`:f64` parameters and results. Both profiles provide exact bit conversion,
+explicit add/subtract/multiply/divide/negate/absolute operations, ordered
+comparisons, and an unordered predicate. Binary32 values are created only by
+explicit rounding, integer conversion, or bit construction; decimal literals
+remain binary64. Finite values, infinities, and both zero signs preserve their
+IEEE-754 bits; NaN payloads are intentionally unobservable and canonicalized
+to quiet NaN `0x7fc00000` or `0x7ff8000000000000`. Division follows IEEE-754,
+including infinities, NaN, and signed zero. There are no implicit integer/float
+conversions, fused operations, remainder, square root, or transcendentals in
+this profile.
 JavaScript is the checked output representation, not the source of Kotoba
 semantics.
 
@@ -31,9 +33,11 @@ that binary64 cannot represent exactly, while `i64-to-f64-rounded` explicitly
 requests IEEE round-to-nearest conversion. `f64-to-i64-checked` accepts only
 finite integral values in signed-i64 range; `f64-to-i64-truncating` explicitly
 requests truncation toward zero and still rejects NaN, infinities, and
-out-of-range results.
+out-of-range results. The corresponding `i64-to-f32-*` and `f32-to-i64-*`
+operations use the same checked-versus-lossy naming. `f64-to-f32-rounded` and
+`f32-to-f64-exact` make width changes explicit.
 
-KIR v4 preserves `:i64`, `:f64`, `:string`, `:keyword`, `:bool`, `:option-i64`, and the
+KIR v4 preserves `:i64`, `:f32`, `:f64`, `:string`, `:keyword`, `:bool`, `:option-i64`, and the
 first bounded `:map` profile as distinct value types. String
 literals must be well-formed UTF-16, are capped at 4,096 UTF-8 bytes each and
 65,536 bytes per module, and every runtime string crossing a function or host

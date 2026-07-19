@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f64-conversions-v1" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f64-conversions-v1'"))
+    (is (= "ieee-754-f32-f64-v1" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v1'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -127,6 +127,55 @@
                      "if(x.truncating(1.9)!==1n||x.truncating(-1.9)!==-1n)process.exit(7);"
                      "for(const v of [NaN,Infinity,-Infinity,9223372036854775808])"
                      "{try{x.truncating(v);process.exit(8)}catch(e){}}})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest f32-is-an-explicitly-rounded-scalar-profile
+  (let [typed-kir
+        {:format :kotoba.kir/v4 :entry nil
+         :exports ['from-bits 'bits 'rounded 'widen 'add 'divide 'unordered
+                   'to-f32 'rounded-i64 'to-i64 'truncating]
+         :effects #{}
+         :functions
+         [{:name 'from-bits :params ['x] :param-types [:i64]
+           :result :f32 :effects #{} :body '(f32-from-bits x)}
+          {:name 'bits :params ['x] :param-types [:f32]
+           :result :i64 :effects #{} :body '(f32-to-bits x)}
+          {:name 'rounded :params ['x] :param-types [:f64]
+           :result :f32 :effects #{} :body '(f64-to-f32-rounded x)}
+          {:name 'widen :params ['x] :param-types [:f32]
+           :result :f64 :effects #{} :body '(f32-to-f64-exact x)}
+          {:name 'add :params ['x 'y] :param-types [:f32 :f32]
+           :result :f32 :effects #{} :body '(f32-add x y)}
+          {:name 'divide :params ['x 'y] :param-types [:f32 :f32]
+           :result :f32 :effects #{} :body '(f32-div x y)}
+          {:name 'unordered :params ['x 'y] :param-types [:f32 :f32]
+           :result :bool :effects #{} :body '(f32-unordered x y)}
+          {:name 'to-f32 :params ['x] :param-types [:i64]
+           :result :f32 :effects #{} :body '(i64-to-f32-checked x)}
+          {:name 'rounded-i64 :params ['x] :param-types [:i64]
+           :result :f32 :effects #{} :body '(i64-to-f32-rounded x)}
+          {:name 'to-i64 :params ['x] :param-types [:f32]
+           :result :i64 :effects #{} :body '(f32-to-i64-checked x)}
+          {:name 'truncating :params ['x] :param-types [:f32]
+           :result :i64 :effects #{} :body '(f32-to-i64-truncating x)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({}),one=x['from-bits'](1065353216n),"
+                     "negz=x['from-bits'](-2147483648n),nan=x['from-bits'](2143289344n);"
+                     "if(one!==1||!Object.is(negz,-0)||x.bits(nan)!==2143289344n)process.exit(2);"
+                     "const tenth=x.rounded(0.1);if(x.bits(tenth)!==1036831949n)process.exit(3);"
+                     "if(x.widen(tenth)!==0.10000000149011612)process.exit(4);"
+                     "if(x.bits(x.add(one,tenth))!==1066192077n)process.exit(5);"
+                     "if(x.divide(one,x['from-bits'](0n))!==Infinity||!x.unordered(nan,one))process.exit(6);"
+                     "if(x['to-f32'](16777216n)!==16777216)process.exit(7);"
+                     "try{x['to-f32'](16777217n);process.exit(8)}catch(e){}"
+                     "if(x['rounded-i64'](16777217n)!==16777216)process.exit(9);"
+                     "if(x['to-i64'](one)!==1n||x.truncating(x.rounded(1.9))!==1n)process.exit(10);"
+                     "try{x['to-i64'](tenth);process.exit(11)}catch(e){}})"
+                     ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
 (deftest capabilities-fail-closed
