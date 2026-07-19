@@ -14,7 +14,7 @@ They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.
 
 Every emitted artifact declares
-`floatingPointPolicy: 'ieee-754-f32-f64-v6'`. KIR v4 admits scalar `:f32` and
+`floatingPointPolicy: 'ieee-754-f32-f64-v7'`. KIR v4 admits scalar `:f32` and
 `:f64` parameters and results. Both profiles provide exact bit conversion,
 explicit add/subtract/multiply/divide/negate/absolute operations, ordered
 comparisons, and an unordered predicate. Binary32 values are created only by
@@ -49,6 +49,12 @@ out-of-domain inputs trap and no host `Math.exp`/`Math.log` call is emitted.
 degree-39 odd kernel after octant reduction, and guarantees absolute error at
 most `2e-15`. It preserves the IEEE signed-zero quadrant cases, rejects NaN
 and infinity, and never calls host `Math.atan2`.
+`f64-exp-bounded` extends exponential to `[-512*ln(2),512*ln(2)]` using fixed
+split-`ln(2)` reduction and exact binary scaling. `f64-log-bounded` accepts
+`[2^-512,2^512]`, extracts a sealed binary exponent/mantissa, and reuses the
+near-one kernel. Their relative/absolute error bounds are `1e-13`; neither
+operation calls host `Math.exp` or `Math.log`, and values outside the declared
+domains trap.
 JavaScript is the checked output representation, not the source of Kotoba
 semantics.
 
