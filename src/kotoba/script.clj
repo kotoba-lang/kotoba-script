@@ -6,7 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "ieee-754-f32-f64-v4")
+(def floating-point-policy "ieee-754-f32-f64-v5")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
@@ -422,6 +422,10 @@
       (do (require-arity! op args 1)
           (require-type! (first types) :f64 (first args))
           :f64)
+      (= op 'f64-exp-near-zero)
+      (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :f64)
+      (= op 'f64-log-near-one)
+      (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :f64)
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
@@ -1059,6 +1063,8 @@
       (= op 'f64-cos-quarter-turn) (str "f64CosQuarterTurn(" (a (first args)) ")")
       (= op 'f64-sin-bounded) (str "f64SinBounded(" (a (first args)) ")")
       (= op 'f64-cos-bounded) (str "f64CosBounded(" (a (first args)) ")")
+      (= op 'f64-exp-near-zero) (str "f64ExpNearZero(" (a (first args)) ")")
+      (= op 'f64-log-near-one) (str "f64LogNearOne(" (a (first args)) ")")
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
       (let [operator ({'f64-eq "===" 'f64-lt "<" 'f64-le "<=" 'f64-gt ">" 'f64-ge ">="} op)]
         (str "(" (a (first args)) operator (a (second args)) ")"))
@@ -1320,6 +1326,23 @@
              "const f64CosBounded=v=>{const [r,q]=reduceBoundedAngle(v);"
              "if(q===0)return f64CosQuarterTurn(r);if(q===1)return -f64SinQuarterTurn(r);"
              "if(q===2)return -f64CosQuarterTurn(r);return f64SinQuarterTurn(r);};"
+             "const f64ExpNearZero=v=>{v=assertF64(v);if(!Number.isFinite(v)||Math.abs(v)>0.5)"
+             "throw new Error('f64-exp-near-zero-domain');let p=1.5619206968586225e-16;"
+             "p=2.8114572543455206e-15+v*p;p=4.779477332387385e-14+v*p;"
+             "p=7.647163731819816e-13+v*p;p=1.1470745597729725e-11+v*p;"
+             "p=1.6059043836821613e-10+v*p;p=2.08767569878681e-9+v*p;"
+             "p=2.505210838544172e-8+v*p;p=2.755731922398589e-7+v*p;"
+             "p=2.7557319223985893e-6+v*p;p=0.0000248015873015873+v*p;"
+             "p=0.0001984126984126984+v*p;p=0.001388888888888889+v*p;"
+             "p=0.008333333333333333+v*p;p=0.041666666666666664+v*p;"
+             "p=0.16666666666666666+v*p;p=0.5+v*p;p=1+v*p;return 1+v*p;};"
+             "const f64LogNearOne=v=>{v=assertF64(v);if(!Number.isFinite(v)||v<0.75||v>1.5)"
+             "throw new Error('f64-log-near-one-domain');const y=(v-1)/(v+1),z=y*y;"
+             "let p=0.047619047619047616;p=0.05263157894736842+z*p;"
+             "p=0.058823529411764705+z*p;p=0.06666666666666667+z*p;"
+             "p=0.07692307692307693+z*p;p=0.09090909090909091+z*p;"
+             "p=0.1111111111111111+z*p;p=0.14285714285714285+z*p;"
+             "p=0.2+z*p;p=0.3333333333333333+z*p;p=1+z*p;return 2*y*p;};"
              "const f32Buffer=new ArrayBuffer(4),f32View=new DataView(f32Buffer);"
              "const f32ToBits=v=>{v=assertF32(v);if(Number.isNaN(v))return 2143289344n;"
              "f32View.setFloat32(0,v,true);return BigInt(f32View.getInt32(0,true));};"
