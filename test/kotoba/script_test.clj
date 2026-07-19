@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f64-arithmetic-v1" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f64-arithmetic-v1'"))
+    (is (= "ieee-754-f64-conversions-v1" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f64-conversions-v1'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -96,6 +96,37 @@
                      "if(!x.equal(0,-0)||x.equal(NaN,NaN)||!x.less(-1,0))process.exit(5);"
                      "if(!x.unordered(NaN,1)||x.unordered(1,2))process.exit(6);"
                      "if(x['nan-bits']()!==9221120237041090560n)process.exit(7)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest f64-i64-conversions-distinguish-exact-rounded-and-truncating
+  (let [typed-kir
+        {:format :kotoba.kir/v4 :entry nil
+         :exports ['to-f64 'rounded 'to-i64 'truncating]
+         :effects #{}
+         :functions
+         [{:name 'to-f64 :params ['x] :param-types [:i64]
+           :result :f64 :effects #{} :body '(i64-to-f64-checked x)}
+          {:name 'rounded :params ['x] :param-types [:i64]
+           :result :f64 :effects #{} :body '(i64-to-f64-rounded x)}
+          {:name 'to-i64 :params ['x] :param-types [:f64]
+           :result :i64 :effects #{} :body '(f64-to-i64-checked x)}
+          {:name 'truncating :params ['x] :param-types [:f64]
+           :result :i64 :effects #{} :body '(f64-to-i64-truncating x)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "if(x['to-f64'](9007199254740992n)!==9007199254740992)process.exit(2);"
+                     "try{x['to-f64'](9007199254740993n);process.exit(3)}catch(e){}"
+                     "if(x.rounded(9007199254740993n)!==9007199254740992)process.exit(4);"
+                     "if(x['to-i64'](-0)!==0n||x['to-i64'](42)!==42n)process.exit(5);"
+                     "for(const v of [1.5,NaN,Infinity,9223372036854775808])"
+                     "{try{x['to-i64'](v);process.exit(6)}catch(e){}}"
+                     "if(x.truncating(1.9)!==1n||x.truncating(-1.9)!==-1n)process.exit(7);"
+                     "for(const v of [NaN,Infinity,-Infinity,9223372036854775808])"
+                     "{try{x.truncating(v);process.exit(8)}catch(e){}}})"))]
     (is (zero? (:exit result)) (:err result))))
 
 (deftest capabilities-fail-closed

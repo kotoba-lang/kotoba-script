@@ -6,7 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "ieee-754-f64-arithmetic-v1")
+(def floating-point-policy "ieee-754-f64-conversions-v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
@@ -381,6 +381,10 @@
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
       (= op 'f64-from-bits)
       (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :f64)
+      (contains? '#{i64-to-f64-checked i64-to-f64-rounded} op)
+      (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :f64)
+      (contains? '#{f64-to-i64-checked f64-to-i64-truncating} op)
+      (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
       (contains? '#{f64-add f64-sub f64-mul f64-div} op)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
@@ -989,6 +993,10 @@
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
       (= op 'f64-to-bits) (str "f64ToBits(" (a (first args)) ")")
       (= op 'f64-from-bits) (str "f64FromBits(" (a (first args)) ")")
+      (= op 'i64-to-f64-checked) (str "i64ToF64Checked(" (a (first args)) ")")
+      (= op 'i64-to-f64-rounded) (str "i64ToF64Rounded(" (a (first args)) ")")
+      (= op 'f64-to-i64-checked) (str "f64ToI64Checked(" (a (first args)) ")")
+      (= op 'f64-to-i64-truncating) (str "f64ToI64Truncating(" (a (first args)) ")")
       (contains? '#{f64-add f64-sub f64-mul f64-div} op)
       (let [operator ({'f64-add "+" 'f64-sub "-" 'f64-mul "*" 'f64-div "/"} op)]
         (str "assertF64(" (a (first args)) operator (a (second args)) ")"))
@@ -1221,6 +1229,15 @@
              "f64View.setFloat64(0,v,true);return f64View.getBigInt64(0,true);};"
              "const f64FromBits=v=>{v=assertI64(v);f64View.setBigInt64(0,v,true);const n=f64View.getFloat64(0,true);"
              "return Number.isNaN(n)?Number.NaN:n;};"
+             "const i64Min=-9223372036854775808n,i64Max=9223372036854775807n;"
+             "const i64ToF64Checked=v=>{v=assertI64(v);const n=Number(v);"
+             "if(BigInt(n)!==v)throw new Error('inexact-i64-to-f64');return n;};"
+             "const i64ToF64Rounded=v=>Number(assertI64(v));"
+             "const checkedI64Range=n=>{if(n<i64Min||n>i64Max)throw new Error('f64-to-i64-out-of-range');return n;};"
+             "const f64ToI64Checked=v=>{v=assertF64(v);if(!Number.isFinite(v)||!Number.isInteger(v))"
+             "throw new Error('inexact-f64-to-i64');return checkedI64Range(BigInt(v));};"
+             "const f64ToI64Truncating=v=>{v=assertF64(v);if(!Number.isFinite(v))"
+             "throw new Error('invalid-f64-to-i64');return checkedI64Range(BigInt(Math.trunc(v)));};"
              "const assertBool=v=>{if(typeof v!=='boolean')throw new Error('invalid-bool');return v;};"
              "const optionNone=Object.freeze([false]);"
              "const optionSome=v=>Object.freeze([true,assertI64(v)]);"
