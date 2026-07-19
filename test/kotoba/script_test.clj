@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f32-f64-v4" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v4'"))
+    (is (= "ieee-754-f32-f64-v5" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v5'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -253,6 +253,31 @@
                      "for(const v of [NaN,Infinity,-Infinity,limit+Number.EPSILON*limit,-limit-Number.EPSILON*limit])"
                      "{for(const f of [x.sin,x.cos]){try{f(v);process.exit(5)}catch(e){"
                      "if(e.message!=='f64-bounded-angle-domain')process.exit(6)}}}})"
+                     ".catch(e=>{console.error(e.message);process.exit(99)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest bounded-exp-and-log-have-fixed-polynomial-contracts
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['exp 'log] :effects #{}
+             :functions
+             [{:name 'exp :params ['x] :param-types [:f64] :result :f64
+               :effects #{} :body '(f64-exp-near-zero x)}
+              {:name 'log :params ['x] :param-types [:f64] :result :f64
+               :effects #{} :body '(f64-log-near-one x)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "for(let i=0;i<=128;i++){const v=-0.5+i/128;"
+                     "if(Math.abs(x.exp(v)-Math.exp(v))>4e-15)process.exit(2);}"
+                     "for(let i=0;i<=128;i++){const v=0.75+0.75*i/128;"
+                     "if(Math.abs(x.log(v)-Math.log(v))>4e-15)process.exit(3);}"
+                     "if(x.exp(0)!==1||!Object.is(x.log(1),0))process.exit(4);"
+                     "for(const [f,values,message] of [[x.exp,[NaN,Infinity,-Infinity,0.5000000000000001],"
+                     "'f64-exp-near-zero-domain'],[x.log,[NaN,Infinity,-Infinity,0,0.7499999999999999,1.5000000000000002],"
+                     "'f64-log-near-one-domain']]){for(const v of values){try{f(v);process.exit(5)}catch(e){"
+                     "if(e.message!==message)process.exit(6)}}}})"
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
