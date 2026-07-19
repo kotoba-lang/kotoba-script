@@ -6,9 +6,9 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "forbidden-v1")
+(def floating-point-policy "ieee-754-f64-bits-v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+(def ^:private value-types #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
@@ -134,6 +134,16 @@
     (fail! "KIR literal is not an integer" {:node n}))
   (str n "n"))
 
+(defn- f64-literal [n]
+  (when-not (instance? Double n)
+    (fail! "KIR literal is not f64" {:node n}))
+  (cond
+    (Double/isNaN n) "Number.NaN"
+    (= Double/POSITIVE_INFINITY n) "Number.POSITIVE_INFINITY"
+    (= Double/NEGATIVE_INFINITY n) "Number.NEGATIVE_INFINITY"
+    (= Long/MIN_VALUE (Double/doubleToRawLongBits n)) "-0"
+    :else (Double/toString n)))
+
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
 
@@ -176,6 +186,7 @@
           (canonical-typed-map-type? type) (record-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
+           :f64 "assertF64("
            :string "assertString("
            :keyword "assertKeyword("
            :map "assertMap("
@@ -363,6 +374,11 @@
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
 
+      (= op 'f64-to-bits)
+      (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
+      (= op 'f64-from-bits)
+      (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :f64)
+
       (= op 'map-new)
       (do (when (odd? (count args))
             (fail! "KIR map-new requires key/value pairs" {:node args}))
@@ -404,6 +420,7 @@
 (defn- infer-type [form env signatures]
   (cond
     (integer? form) :i64
+    (instance? Double form) :f64
     (string? form)
     (let [bytes (utf8-byte-count form)]
       (when (> bytes max-string-literal-bytes)
@@ -955,6 +972,8 @@
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'f64-to-bits) (str "f64ToBits(" (a (first args)) ")")
+      (= op 'f64-from-bits) (str "f64FromBits(" (a (first args)) ")")
       (= op 'map-new)
       (str "makeMap([" (str/join "," (map (fn [[key value]]
                                                (str "[" (a key) "," (a value) "]"))
@@ -972,6 +991,7 @@
 (defn emit-expr [form env functions]
   (cond
     (integer? form) (bigint-literal form)
+    (instance? Double form) (f64-literal form)
     (string? form) (js-string form)
     (keyword? form) (js-string (keyword-text form))
     (boolean? form) (if form "true" "false")
@@ -1170,6 +1190,12 @@
              "throw new Error('capability-grant-mismatch');"
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
+             "const assertF64=v=>{if(typeof v!=='number')throw new Error('invalid-f64');return v;};"
+             "const f64Buffer=new ArrayBuffer(8);const f64View=new DataView(f64Buffer);"
+             "const f64ToBits=v=>{v=assertF64(v);if(Number.isNaN(v))return 9221120237041090560n;"
+             "f64View.setFloat64(0,v,true);return f64View.getBigInt64(0,true);};"
+             "const f64FromBits=v=>{v=assertI64(v);f64View.setBigInt64(0,v,true);const n=f64View.getFloat64(0,true);"
+             "return Number.isNaN(n)?Number.NaN:n;};"
              "const assertBool=v=>{if(typeof v!=='boolean')throw new Error('invalid-bool');return v;};"
              "const optionNone=Object.freeze([false]);"
              "const optionSome=v=>Object.freeze([true,assertI64(v)]);"
@@ -1187,7 +1213,7 @@
              "const sameType=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((x,i)=>sameType(x,b[i])));"
              "const assertTypedValue=(t,v,d,s)=>{if(++s.nodes>" max-type-nodes
              ")throw new Error('adt-node-limit');if(d>" max-type-depth
-             ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);"
+             ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);if(t==='f64')return assertF64(v);"
              "if(t==='string')return assertString(v);if(t==='keyword')return assertKeyword(v);"
              "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
