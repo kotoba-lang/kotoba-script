@@ -14,7 +14,7 @@ They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.
 
 Every emitted artifact declares
-`floatingPointPolicy: 'ieee-754-f32-f64-v1'`. KIR v4 admits scalar `:f32` and
+`floatingPointPolicy: 'ieee-754-f32-f64-v2'`. KIR v4 admits scalar `:f32` and
 `:f64` parameters and results. Both profiles provide exact bit conversion,
 explicit add/subtract/multiply/divide/negate/absolute operations, ordered
 comparisons, and an unordered predicate. Binary32 values are created only by
@@ -23,8 +23,13 @@ remain binary64. Finite values, infinities, and both zero signs preserve their
 IEEE-754 bits; NaN payloads are intentionally unobservable and canonicalized
 to quiet NaN `0x7fc00000` or `0x7ff8000000000000`. Division follows IEEE-754,
 including infinities, NaN, and signed zero. There are no implicit integer/float
-conversions, fused operations, remainder, square root, or transcendentals in
+conversions, fused operations, remainder, or general transcendentals in
 this profile.
+
+`f32-sqrt`/`f64-sqrt` and `f32-min`/`f32-max`/`f64-min`/`f64-max`
+propagate NaN. Minimum selects negative zero and maximum selects positive zero
+when the operands are opposite zero signs. Binary32 results round after the
+named operation.
 JavaScript is the checked output representation, not the source of Kotoba
 semantics.
 
