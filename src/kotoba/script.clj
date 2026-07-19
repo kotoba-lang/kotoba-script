@@ -1357,7 +1357,7 @@
              "const mapAssoc=(m,entries)=>{m=assertMap(m);const merged=new Map(m);"
              "for(const e of entries){if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-map');"
              "merged.set(assertKeyword(e[0]),assertI64(e[1]));}return makeMap(Array.from(merged));};"
-             "let fuel=256;"
+             "let fuel=512;"
              "const charge=()=>{fuel--;if(fuel<0)throw new Error('fuel-exhausted');};"
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"
              "if(a===-9223372036854775808n&&b===-1n)throw new Error('signed-division-overflow');return a/b;};"

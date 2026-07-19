@@ -19,6 +19,7 @@
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (= "42\n" (:out result)))
+    (is (str/includes? source "let fuel=512;"))
     (is (not (re-find #"globalThis|window|document|eval" source)))))
 
 (deftest floating-point-is-explicitly-forbidden-and-artifact-sealed
