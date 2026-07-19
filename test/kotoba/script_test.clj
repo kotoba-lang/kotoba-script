@@ -572,6 +572,8 @@
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});const before=[1n,2n];"
+                "const fixture=Array.from({length:12171},(_,i)=>BigInt(i&255));"
+                "if(x['count-items'](fixture)!==12171n||x['require-item'](fixture,12170n)!==138n)process.exit(10);"
                 "const after=x.update(before,0n,7n);const appended=x.append(after,8n);"
                 "if(x['count-items'](before)!==2n||x.lookup(before,9n)!==99n||x.lookup(before,-1n)!==99n||x.lookup(before,9223372036854775807n)!==99n)process.exit(2);"
                 "if(x['require-item'](before,1n)!==2n||x['drop-items']([1n,2n,3n],1n).join(',')!=='2,3')process.exit(9);"
@@ -579,10 +581,12 @@
                 "if(x['same?']([1n,2n],[1n,2n])!==1n||x['same?']([1n],[2n])!==0n)process.exit(8);"
                 "for(const bad of [null,[1],[1n,'x']]){try{x['count-items'](bad);process.exit(4)}"
                 "catch(e){if(e.message!=='invalid-vector-i64'&&e.message!=='invalid-i64')process.exit(5)}}"
+                "try{x['count-items'](Array.from({length:16385},()=>0n));process.exit(11)}"
+                "catch(e){if(e.message!=='vector-too-large')process.exit(12)}"
                 "try{x.update(before,2n,3n);process.exit(6)}catch(e){if(e.message!=='vector-index-out-of-range')process.exit(7)}})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
-    (is (str/includes? source "vectorLimits:Object.freeze({items:128})"))
+    (is (str/includes? source "vectorLimits:Object.freeze({items:16384})"))
     (is (str/includes? source "const makeVector=")))
   (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['at] :effects #{}
              :functions [{:name 'at :params ['v] :param-types [:vector-i64]
@@ -599,7 +603,7 @@
                          {:format :kotoba.kir/v4 :entry nil :exports ['too-large] :effects #{}
                           :functions [{:name 'too-large :params [] :param-types []
                                        :result :vector-i64 :effects #{}
-                                       :body (apply list 'vector-new (range 129))}]}))))
+                                       :body (apply list 'vector-new (range 16385))}]}))))
 
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
