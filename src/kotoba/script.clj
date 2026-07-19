@@ -6,7 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "ieee-754-f32-f64-v5")
+(def floating-point-policy "ieee-754-f32-f64-v6")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
@@ -426,6 +426,10 @@
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :f64)
       (= op 'f64-log-near-one)
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :f64)
+      (= op 'f64-atan2-bounded)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
+          :f64)
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
@@ -1065,6 +1069,7 @@
       (= op 'f64-cos-bounded) (str "f64CosBounded(" (a (first args)) ")")
       (= op 'f64-exp-near-zero) (str "f64ExpNearZero(" (a (first args)) ")")
       (= op 'f64-log-near-one) (str "f64LogNearOne(" (a (first args)) ")")
+      (= op 'f64-atan2-bounded) (str "f64Atan2Bounded(" (a (first args)) "," (a (second args)) ")")
       (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
       (let [operator ({'f64-eq "===" 'f64-lt "<" 'f64-le "<=" 'f64-gt ">" 'f64-ge ">="} op)]
         (str "(" (a (first args)) operator (a (second args)) ")"))
@@ -1343,6 +1348,25 @@
              "p=0.07692307692307693+z*p;p=0.09090909090909091+z*p;"
              "p=0.1111111111111111+z*p;p=0.14285714285714285+z*p;"
              "p=0.2+z*p;p=0.3333333333333333+z*p;p=1+z*p;return 2*y*p;};"
+             "const f64AtanUnit=v=>{const t=v<=0.41421356237309503?v:(v-1)/(v+1),z=t*t;"
+             "let p=-0.02564102564102564;p=0.02702702702702703+z*p;"
+             "p=-0.02857142857142857+z*p;p=0.030303030303030304+z*p;"
+             "p=-0.03225806451612903+z*p;p=0.034482758620689655+z*p;"
+             "p=-0.037037037037037035+z*p;p=0.04+z*p;p=-0.043478260869565216+z*p;"
+             "p=0.047619047619047616+z*p;p=-0.05263157894736842+z*p;"
+             "p=0.058823529411764705+z*p;p=-0.06666666666666667+z*p;"
+             "p=0.07692307692307693+z*p;p=-0.09090909090909091+z*p;"
+             "p=0.1111111111111111+z*p;p=-0.14285714285714285+z*p;"
+             "p=0.2+z*p;p=-0.3333333333333333+z*p;p=1+z*p;"
+             "const a=t*p;return v<=0.41421356237309503?a:0.7853981633974483+a;};"
+             "const f64Atan2Bounded=(y,x)=>{y=assertF64(y);x=assertF64(x);"
+             "if(!Number.isFinite(y)||!Number.isFinite(x))throw new Error('f64-atan2-bounded-domain');"
+             "const yn=y<0||Object.is(y,-0),xn=x<0||Object.is(x,-0);"
+             "if(y===0){if(xn)return yn?-3.141592653589793:3.141592653589793;return y;}"
+             "if(x===0)return yn?-1.5707963267948966:1.5707963267948966;"
+             "const ay=Math.abs(y),ax=Math.abs(x),swap=ay>ax,r=swap?ax/ay:ay/ax;"
+             "let a=f64AtanUnit(r);if(swap)a=1.5707963267948966-a;"
+             "if(xn)a=3.141592653589793-a;if(yn)a=-a;return a;};"
              "const f32Buffer=new ArrayBuffer(4),f32View=new DataView(f32Buffer);"
              "const f32ToBits=v=>{v=assertF32(v);if(Number.isNaN(v))return 2143289344n;"
              "f32View.setFloat32(0,v,true);return BigInt(f32View.getInt32(0,true));};"

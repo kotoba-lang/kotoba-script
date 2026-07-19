@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f32-f64-v5" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v5'"))
+    (is (= "ieee-754-f32-f64-v6" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v6'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -278,6 +278,24 @@
                      "'f64-exp-near-zero-domain'],[x.log,[NaN,Infinity,-Infinity,0,0.7499999999999999,1.5000000000000002],"
                      "'f64-log-near-one-domain']]){for(const v of values){try{f(v);process.exit(5)}catch(e){"
                      "if(e.message!==message)process.exit(6)}}}})"
+                     ".catch(e=>{console.error(e.message);process.exit(99)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest bounded-atan2-has-a-fixed-finite-domain-contract
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['atan2] :effects #{}
+             :functions [{:name 'atan2 :params ['y 'x] :param-types [:f64 :f64]
+                          :result :f64 :effects #{} :body '(f64-atan2-bounded y x)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const f=m.instantiateKotoba({}).atan2;"
+                     "for(const y of [-1e300,-7,-1,-0,0,1,7,1e300])for(const x of [-1e300,-9,-1,-0,0,1,9,1e300]){"
+                     "if(Math.abs(f(y,x)-Math.atan2(y,x))>2e-15)process.exit(2);}"
+                     "if(!Object.is(f(-0,1),-0)||f(0,-1)!==Math.PI||f(-0,-1)!==-Math.PI)process.exit(3);"
+                     "for(const p of [[NaN,1],[1,NaN],[Infinity,1],[1,-Infinity]])try{f(...p);process.exit(4)}"
+                     "catch(e){if(e.message!=='f64-atan2-bounded-domain')process.exit(5)}})"
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
