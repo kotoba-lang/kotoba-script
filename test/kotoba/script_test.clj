@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f32-f64-v3" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v3'"))
+    (is (= "ieee-754-f32-f64-v4" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v4'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -229,6 +229,30 @@
                      "for(const v of [NaN,Infinity,-Infinity,q+Number.EPSILON,-q-Number.EPSILON])"
                      "{for(const f of [x.sin,x.cos]){try{f(v);process.exit(5)}catch(e){"
                      "if(e.message!=='f64-quarter-turn-domain')process.exit(6)}}}})"
+                     ".catch(e=>{console.error(e.message);process.exit(99)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest bounded-wide-angle-trigonometry-has-explicit-range-reduction
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['sin 'cos] :effects #{}
+             :functions
+             [{:name 'sin :params ['x] :param-types [:f64] :result :f64
+               :effects #{} :body '(f64-sin-bounded x)}
+              {:name 'cos :params ['x] :param-types [:f64] :result :f64
+               :effects #{} :body '(f64-cos-bounded x)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({}),limit=8192*Math.PI;"
+                     "for(const v of [0,-0,Math.PI/2,-Math.PI/2,Math.PI,-Math.PI,limit,-limit]){"
+                     "if(Math.abs(x.sin(v)-Math.sin(v))>5e-12||Math.abs(x.cos(v)-Math.cos(v))>5e-12)process.exit(2);}"
+                     "for(let i=0;i<=128;i++){const v=-limit+2*limit*i/128;"
+                     "if(Math.abs(x.sin(v)-Math.sin(v))>5e-12||Math.abs(x.cos(v)-Math.cos(v))>5e-12)process.exit(3);}"
+                     "if(!Object.is(x.sin(-0),-0)||x.cos(-0)!==1)process.exit(4);"
+                     "for(const v of [NaN,Infinity,-Infinity,limit+Number.EPSILON*limit,-limit-Number.EPSILON*limit])"
+                     "{for(const f of [x.sin,x.cos]){try{f(v);process.exit(5)}catch(e){"
+                     "if(e.message!=='f64-bounded-angle-domain')process.exit(6)}}}})"
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
