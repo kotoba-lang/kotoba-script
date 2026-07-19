@@ -50,8 +50,8 @@
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
-    (is (= "ieee-754-f64-bits-v1" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'ieee-754-f64-bits-v1'"))
+    (is (= "ieee-754-f64-arithmetic-v1" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f64-arithmetic-v1'"))
     (is (zero? (:exit result)) (:err result))
     (is (= "f64-ok\n" (:out result)))
     (is (str/includes? source "f64ToBits")))
@@ -60,6 +60,43 @@
                          {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
                           :functions [{:name 'bad :params ['x] :param-types [:f64]
                                        :result :i64 :effects #{} :body 'x}]}))))
+
+(deftest f64-arithmetic-has-explicit-ieee-special-value-semantics
+  (let [typed-kir
+        {:format :kotoba.kir/v4 :entry nil
+         :exports ['add 'divide 'neg 'absolute 'equal 'less 'unordered 'nan-bits]
+         :effects #{}
+         :functions
+         [{:name 'add :params ['x 'y] :param-types [:f64 :f64]
+           :result :f64 :effects #{} :body '(f64-add x y)}
+          {:name 'divide :params ['x 'y] :param-types [:f64 :f64]
+           :result :f64 :effects #{} :body '(f64-div x y)}
+          {:name 'neg :params ['x] :param-types [:f64]
+           :result :f64 :effects #{} :body '(f64-neg x)}
+          {:name 'absolute :params ['x] :param-types [:f64]
+           :result :f64 :effects #{} :body '(f64-abs x)}
+          {:name 'equal :params ['x 'y] :param-types [:f64 :f64]
+           :result :bool :effects #{} :body '(f64-eq x y)}
+          {:name 'less :params ['x 'y] :param-types [:f64 :f64]
+           :result :bool :effects #{} :body '(f64-lt x y)}
+          {:name 'unordered :params ['x 'y] :param-types [:f64 :f64]
+           :result :bool :effects #{} :body '(f64-unordered x y)}
+          {:name 'nan-bits :params [] :param-types []
+           :result :i64 :effects #{}
+           :body '(f64-to-bits (f64-div (f64-from-bits 0) (f64-from-bits 0)))}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "if(x.add(0.1,0.2)!==0.30000000000000004)process.exit(2);"
+                     "if(x.divide(1,0)!==Infinity||!Number.isNaN(x.divide(0,0)))process.exit(3);"
+                     "if(!Object.is(x.neg(0),-0)||!Object.is(x.absolute(-0),0))process.exit(4);"
+                     "if(!x.equal(0,-0)||x.equal(NaN,NaN)||!x.less(-1,0))process.exit(5);"
+                     "if(!x.unordered(NaN,1)||x.unordered(1,2))process.exit(6);"
+                     "if(x['nan-bits']()!==9221120237041090560n)process.exit(7)})"))]
+    (is (zero? (:exit result)) (:err result))))
 
 (deftest capabilities-fail-closed
   (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main

@@ -6,7 +6,7 @@
            [com.google.javascript.rhino Node]))
 
 (def artifact-schema "kotoba-js-artifact/v1")
-(def floating-point-policy "ieee-754-f64-bits-v1")
+(def floating-point-policy "ieee-754-f64-arithmetic-v1")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
 (def ^:private max-string-literal-bytes 4096)
@@ -33,7 +33,10 @@
    (when (> depth max-type-depth)
      (fail! "KIR value type exceeds depth limit" {:limit max-type-depth}))
    (cond
-     (contains? value-types type) type
+     (contains? value-types type)
+     (do (when (and (= type :f64) (pos? depth))
+           (fail! "f64 is admitted only as a scalar" {:type type}))
+         type)
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
@@ -378,6 +381,18 @@
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
       (= op 'f64-from-bits)
       (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :f64)
+      (contains? '#{f64-add f64-sub f64-mul f64-div} op)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
+          :f64)
+      (contains? '#{f64-neg f64-abs} op)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :f64 (first args))
+          :f64)
+      (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge f64-unordered} op)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
+          :bool)
 
       (= op 'map-new)
       (do (when (odd? (count args))
@@ -974,6 +989,16 @@
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
       (= op 'f64-to-bits) (str "f64ToBits(" (a (first args)) ")")
       (= op 'f64-from-bits) (str "f64FromBits(" (a (first args)) ")")
+      (contains? '#{f64-add f64-sub f64-mul f64-div} op)
+      (let [operator ({'f64-add "+" 'f64-sub "-" 'f64-mul "*" 'f64-div "/"} op)]
+        (str "assertF64(" (a (first args)) operator (a (second args)) ")"))
+      (= op 'f64-neg) (str "assertF64(-" (a (first args)) ")")
+      (= op 'f64-abs) (str "Math.abs(" (a (first args)) ")")
+      (contains? '#{f64-eq f64-lt f64-le f64-gt f64-ge} op)
+      (let [operator ({'f64-eq "===" 'f64-lt "<" 'f64-le "<=" 'f64-gt ">" 'f64-ge ">="} op)]
+        (str "(" (a (first args)) operator (a (second args)) ")"))
+      (= op 'f64-unordered)
+      (str "(Number.isNaN(" (a (first args)) ")||Number.isNaN(" (a (second args)) "))")
       (= op 'map-new)
       (str "makeMap([" (str/join "," (map (fn [[key value]]
                                                (str "[" (a key) "," (a value) "]"))
