@@ -22,19 +22,44 @@
     (is (str/includes? source "let fuel=512;"))
     (is (not (re-find #"globalThis|window|document|eval" source)))))
 
-(deftest floating-point-is-explicitly-forbidden-and-artifact-sealed
-  (let [source (script/emit kir)]
-    (is (= "forbidden-v1" script/floating-point-policy))
-    (is (str/includes? source "floatingPointPolicy:'forbidden-v1'")))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unsupported KIR node"
+(deftest floating-point-f64-bit-profile-is-explicit-and-sealed
+  (let [typed-kir
+        {:format :kotoba.kir/v4 :entry nil
+         :exports ['bits 'from-bits 'negative-zero 'infinity 'nan-bits]
+         :effects #{}
+         :functions
+         [{:name 'bits :params ['value] :param-types [:f64]
+           :result :i64 :effects #{} :body '(f64-to-bits value)}
+          {:name 'from-bits :params ['value] :param-types [:i64]
+           :result :f64 :effects #{} :body '(f64-from-bits value)}
+          {:name 'negative-zero :params [] :param-types []
+           :result :f64 :effects #{} :body -0.0}
+          {:name 'infinity :params [] :param-types []
+           :result :f64 :effects #{} :body Double/POSITIVE_INFINITY}
+          {:name 'nan-bits :params [] :param-types []
+           :result :i64 :effects #{} :body '(f64-to-bits ##NaN)}]}
+        source (script/emit typed-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.bits(1.5)!==4609434218613702656n)process.exit(2);"
+                "if(x.bits(-0)!==-9223372036854775808n)process.exit(3);"
+                "if(!Object.is(x['negative-zero'](),-0))process.exit(4);"
+                "if(x.infinity()!==Infinity)process.exit(5);"
+                "if(x['nan-bits']()!==9221120237041090560n)process.exit(6);"
+                "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
+                "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (= "ieee-754-f64-bits-v1" script/floating-point-policy))
+    (is (str/includes? source "floatingPointPolicy:'ieee-754-f64-bits-v1'"))
+    (is (zero? (:exit result)) (:err result))
+    (is (= "f64-ok\n" (:out result)))
+    (is (str/includes? source "f64ToBits")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"type mismatch"
                         (script/emit
-                         {:format :kotoba.kir/v3 :entry 'main :effects #{}
-                          :functions [{:name 'main :params [] :body 1.5}]})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"outside the safe profile"
-                        (script/emit
-                         {:format :kotoba.kir/v4 :entry nil :exports ['identity] :effects #{}
-                          :functions [{:name 'identity :params ['x] :param-types [:f64]
-                                       :result :f64 :effects #{} :body 'x}]}))))
+                         {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                          :functions [{:name 'bad :params ['x] :param-types [:f64]
+                                       :result :i64 :effects #{} :body 'x}]}))))
 
 (deftest capabilities-fail-closed
   (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main
