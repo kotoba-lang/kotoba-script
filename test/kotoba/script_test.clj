@@ -98,6 +98,16 @@
                      "if(x['nan-bits']()!==9221120237041090560n)process.exit(7)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(deftest direct-floating-ordered-collections-fail-closed
+  (doseq [type [[:set :f64] [:map :keyword :f64] [:map :f32 :i64]]]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"direct floating"
+         (script/emit
+          {:format :kotoba.kir/v4 :entry nil :exports [] :effects #{}
+           :functions [{:name 'value :params [] :param-types [] :result type
+                        :effects #{} :body 0}]})))))
+
 (deftest f64-i64-conversions-distinguish-exact-rounded-and-truncating
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil
