@@ -718,6 +718,38 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly match"
                           (script/emit (assoc-in kir [:functions 0 :body]
                                                  (list 'hetero-vector-new type 7 "安全")))))
+
+(deftest structured-f64-values-preserve-nan-and-signed-zero
+  (let [vector-type [:vector [:f64 :f64]]
+        record-type [:record :geometry/point [[:x :f64] [:y :f64]]]
+        kir {:format :kotoba.kir/v4 :entry nil
+             :exports ['make-vector 'vector-x 'make-point 'point-y 'move-x]
+             :effects #{}
+             :functions
+             [{:name 'make-vector :params [] :param-types [] :result vector-type :effects #{}
+               :body (list 'hetero-vector-new vector-type -0.0 ##NaN)}
+              {:name 'vector-x :params ['value] :param-types [vector-type]
+               :result :f64 :effects #{}
+               :body (list 'hetero-vector-at vector-type 'value 0)}
+              {:name 'make-point :params [] :param-types [] :result record-type :effects #{}
+               :body (list 'record-new record-type 1.25 -0.0)}
+              {:name 'point-y :params ['value] :param-types [record-type]
+               :result :f64 :effects #{}
+               :body (list 'record-get record-type 'value :y)}
+              {:name 'move-x :params ['value 'x] :param-types [record-type :f64]
+               :result record-type :effects #{}
+               :body (list 'record-assoc record-type 'value :x 'x)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded "').then(m=>{"
+                     "const x=m.instantiateKotoba({}),v=x['make-vector'](),p=x['make-point']();"
+                     "if(!Object.is(x['vector-x'](v),-0)||!Number.isNaN(v[2]))process.exit(2);"
+                     "if(!Object.is(x['point-y'](p),-0)||x['move-x'](p,2.5)[1]!==2.5)process.exit(3);"
+                     "try{x['point-y']([p[0],1.0,'bad']);process.exit(4)}"
+                     "catch(e){if(e.message!=='invalid-f64')process.exit(5)}})"))]
+    (is (zero? (:exit result)) (:err result))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"in-range integer literal"
                           (script/emit (assoc-in kir [:functions 1 :body]
                                                  (list 'hetero-vector-at type 'value 3))))))
