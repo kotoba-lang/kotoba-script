@@ -14,7 +14,7 @@ They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.
 
 Every emitted artifact declares
-`floatingPointPolicy: 'ieee-754-f64-arithmetic-v1'`. KIR v4 admits `:f64`
+`floatingPointPolicy: 'ieee-754-f64-conversions-v1'`. KIR v4 admits `:f64`
 parameters, results, literals, exact bit conversion, explicit add/subtract/
 multiply/divide/negate/absolute operations, ordered comparisons, and an
 unordered predicate. Finite values,
@@ -25,6 +25,13 @@ and signed zero. There are no implicit integer/float conversions, fused
 operations, remainder, square root, or transcendentals in this profile.
 JavaScript is the checked output representation, not the source of Kotoba
 semantics.
+
+Numeric conversion is never implicit. `i64-to-f64-checked` rejects integers
+that binary64 cannot represent exactly, while `i64-to-f64-rounded` explicitly
+requests IEEE round-to-nearest conversion. `f64-to-i64-checked` accepts only
+finite integral values in signed-i64 range; `f64-to-i64-truncating` explicitly
+requests truncation toward zero and still rejects NaN, infinities, and
+out-of-range results.
 
 KIR v4 preserves `:i64`, `:f64`, `:string`, `:keyword`, `:bool`, `:option-i64`, and the
 first bounded `:map` profile as distinct value types. String
