@@ -14,7 +14,7 @@ They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.
 
 Every emitted artifact declares
-`floatingPointPolicy: 'ieee-754-f32-f64-v2'`. KIR v4 admits scalar `:f32` and
+`floatingPointPolicy: 'ieee-754-f32-f64-v3'`. KIR v4 admits scalar `:f32` and
 `:f64` parameters and results. Both profiles provide exact bit conversion,
 explicit add/subtract/multiply/divide/negate/absolute operations, ordered
 comparisons, and an unordered predicate. Binary32 values are created only by
@@ -30,6 +30,11 @@ this profile.
 propagate NaN. Minimum selects negative zero and maximum selects positive zero
 when the operands are opposite zero signs. Binary32 results round after the
 named operation.
+
+Qualified `f64-sin-quarter-turn` and `f64-cos-quarter-turn` accept only finite
+radians in `[-pi/4, pi/4]`, evaluate fixed degree-17/16 Horner polynomials
+without FMA, and guarantee absolute error at most `4e-15`. Inputs outside the
+sealed domain trap instead of invoking ambient host transcendental functions.
 JavaScript is the checked output representation, not the source of Kotoba
 semantics.
 
