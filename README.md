@@ -14,13 +14,17 @@ They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.
 
 Every emitted artifact declares
-`floatingPointPolicy: 'ieee-754-f64-bits-v1'`. KIR v4 admits `:f64` parameters,
-results, literals, `f64-to-bits`, and `f64-from-bits`. Finite values,
+`floatingPointPolicy: 'ieee-754-f64-arithmetic-v1'`. KIR v4 admits `:f64`
+parameters, results, literals, exact bit conversion, explicit add/subtract/
+multiply/divide/negate/absolute operations, ordered comparisons, and an
+unordered predicate. Finite values,
 infinities, and both zero signs preserve their IEEE-754 binary64 bits; NaN
 payloads are intentionally unobservable and canonicalized to quiet NaN
-`0x7ff8000000000000`. There are no implicit integer/float conversions and no
-floating arithmetic or transcendentals in this first profile. JavaScript is
-the checked output representation, not the source of Kotoba semantics.
+`0x7ff8000000000000`. Division follows IEEE-754, including infinities, NaN,
+and signed zero. There are no implicit integer/float conversions, fused
+operations, remainder, square root, or transcendentals in this profile.
+JavaScript is the checked output representation, not the source of Kotoba
+semantics.
 
 KIR v4 preserves `:i64`, `:f64`, `:string`, `:keyword`, `:bool`, `:option-i64`, and the
 first bounded `:map` profile as distinct value types. String
