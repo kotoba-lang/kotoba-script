@@ -3,7 +3,8 @@
 Status: implemented in Kotoba Script; compiler qualification pending
 
 Kotoba admits XML only as a pure, bounded value transformation. The profile
-supports a strict XML declaration, comments, elements, quoted attributes,
+supports a strict XML declaration (with case-insensitive `UTF-8` encoding
+spelling), comments, elements, quoted attributes,
 self-closing elements, and whitespace between elements. It rejects DTDs,
 entities, processing instructions, CDATA, mixed/text content, duplicate
 attributes, mismatched closing tags, malformed UTF-16, and trailing content.
