@@ -1128,6 +1128,13 @@
           :body '(document-vector-drop (changed) 1)}
          {:name 'removed :params [] :param-types [] :result :document :effects #{}
           :body '(document-vector-remove (changed) 1)}
+         {:name 'entry :params [] :param-types [] :result :document :effects #{}
+          :body '(option-value-of [:option :document]
+                   (document-map-entry-at
+                     (document-map :z (document-i64 9) :a (document-string "first")) 0)
+                   (document-null))}
+         {:name 'key-name :params [] :param-types [] :result :string :effects #{}
+          :body '(keyword-name :rdf/type)}
          {:name 'bad-assoc :params [] :param-types [] :result :document :effects #{}
           :body '(document-vector-assoc (items) -1 (document-null))}]
         source (script/emit {:format :kotoba.kir/v4 :entry nil
@@ -1137,7 +1144,8 @@
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),v=x.changed(),t=x.tail();"
-                     "const r=x.removed();if(x['first-item']()!==1n||x.kind()!==':fixed'||v[1].length!==3||v[1][1][1]!==7n||t[1].length!==2||r[1].length!==2||r[1][1][1]!==9n)process.exit(2);"
+                     "const r=x.removed(),e=x.entry();if(x['first-item']()!==1n||x.kind()!==':fixed'||x['key-name']()!=='type'||v[1].length!==3||v[1][1][1]!==7n||t[1].length!==2||r[1].length!==2||r[1][1][1]!==9n)process.exit(2);"
+                     "if(e[0]!=='vector'||e[1][0][1]!==':a'||e[1][1][1]!=='first')process.exit(6);"
                      "if(!Object.isFrozen(v)||!Object.isFrozen(v[1])||!Object.isFrozen(t))process.exit(3);"
                      "try{x['bad-assoc']();process.exit(4)}catch(e){if(e.message!=='doc-vector-index-out-of-range')process.exit(5)}"
                      "})"))]

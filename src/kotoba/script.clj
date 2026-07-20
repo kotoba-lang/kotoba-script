@@ -489,6 +489,10 @@
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1)) [:option :document])
+      (= op 'document-map-entry-at)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) [:option :document])
       (= op 'document-vector-assoc)
       (do (require-arity! op args 3)
           (require-type! (nth types 0) :document (nth args 0))
@@ -569,6 +573,9 @@
       (= op 'keyword-from-string)
       (do (require-arity! op args 1)
           (require-type! (first types) :string (first args)) :keyword)
+      (= op 'keyword-name)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :keyword (first args)) :string)
       (= op 'xml-path-count)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
@@ -1272,6 +1279,7 @@
                                 (partition 2 args))) "])")
       (= op 'document-count) (str "docCount(" (a (first args)) ")")
       (= op 'document-vector-at) (str "docVectorAt(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-map-entry-at) (str "docMapEntryAt(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-assoc) (str "docVectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
       (= op 'document-vector-conj) (str "docVectorConj(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-drop) (str "docVectorDrop(" (a (first args)) "," (a (second args)) ")")
@@ -1296,6 +1304,7 @@
       (= op 'string-replace-all) (str "stringReplaceAll(" (a (first args)) ","
                                       (a (second args)) "," (a (nth args 2)) ")")
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
+      (= op 'keyword-name) (str "keywordName(" (a (first args)) ")")
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
       (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
                                  (a (nth args 2)) "," (a (nth args 3)) ")")
@@ -1952,6 +1961,9 @@
              "const docVectorEntries=v=>{v=assertDoc(v);if(v[0]!=='vector')throw new Error('doc-vector-required');return v[1];};"
              "const docCount=v=>{v=assertDoc(v);if(v[0]!=='map'&&v[0]!=='vector')throw new Error('doc-container-required');return BigInt(v[1].length);};"
              "const docVectorAt=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);const ok=index>=0n&&index<BigInt(items.length);return makeGenericOption(docType,ok,ok?items[Number(index)]:undefined);};"
+             "const docMapEntryAt=(v,index)=>{const items=docMapEntries(v);index=assertI64(index);"
+             "const ok=index>=0n&&index<BigInt(items.length);const entry=ok?items[Number(index)]:null;"
+             "return makeGenericOption(docType,ok,ok?makeDocVector([makeDocScalar('keyword',entry[0]),entry[1]]):undefined);};"
              "const docVectorAssoc=(v,index,item)=>{const items=docVectorEntries(v);index=assertI64(index);item=assertDoc(item);if(index<0n||index>=BigInt(items.length))throw new Error('doc-vector-index-out-of-range');const out=[...items];out[Number(index)]=item;return makeDocVector(out);};"
              "const docVectorConj=(v,item)=>{const items=docVectorEntries(v);item=assertDoc(item);if(items.length>=32)throw new Error('doc-vector-too-large');return makeDocVector([...items,item]);};"
              "const docVectorDrop=(v,count)=>{const items=docVectorEntries(v);count=assertI64(count);if(count<0n||count>BigInt(items.length))throw new Error('doc-vector-drop-out-of-range');return makeDocVector(items.slice(Number(count)));};"
@@ -2025,6 +2037,8 @@
              ")throw new Error('keyword-too-large');return v;};"
              "const keywordFromString=v=>{v=assertString(v);if(v.length===0||v[0]===':'||/\\s/u.test(v))"
              "throw new Error('invalid-keyword-source');return assertKeyword(':'+v);};"
+             "const keywordName=v=>{v=assertKeyword(v).slice(1);const i=v.lastIndexOf('/');"
+             "return assertString(i<0?v:v.slice(i+1));};"
              "const makeMap=entries=>{if(!Array.isArray(entries)||entries.length>" max-map-entries
              ")throw new Error('map-too-large');const seen=new Set();const out=[];"
              "for(const entry of entries){if(!Array.isArray(entry)||entry.length!==2)throw new Error('invalid-map');"
