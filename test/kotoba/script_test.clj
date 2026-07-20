@@ -32,9 +32,9 @@
                ['add ['x 'y] '(i32-wrapping-add x y)]
                ['mul ['x 'y] '(i32-wrapping-mul x y)]
                ['xor ['x 'y] '(i32-xor x y)]
-               ['shl ['x 'n] '(i32-shift-left x n)]
-               ['shr ['x 'n] '(i32-shift-right x n)]
-               ['ushr ['x 'n] '(u32-shift-right x n)]
+               ['shl ['x] '(i32-shift-left x 31)]
+               ['shr ['x] '(i32-shift-right x 31)]
+               ['ushr ['x] '(u32-shift-right x 1)]
                ['next ['x] '(xorshift32 x)]])
         source (script/emit {:format :kotoba.kir/v4 :entry nil
                              :exports (mapv :name functions) :effects #{}
@@ -44,15 +44,21 @@
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.signed(4294967295n)!==-1n||x.unsigned(-1n)!==4294967295n)process.exit(2);"
                 "if(x.add(2147483647n,1n)!==-2147483648n||x.mul(2147483647n,2n)!==-2n)process.exit(3);"
-                "if(x.xor(-1n,2147483647n)!==-2147483648n||x.shl(1n,31n)!==-2147483648n)process.exit(4);"
-                "if(x.shr(-2147483648n,31n)!==-1n||x.ushr(-1n,1n)!==2147483647n)process.exit(5);"
+                "if(x.xor(-1n,2147483647n)!==-2147483648n||x.shl(1n)!==-2147483648n)process.exit(4);"
+                "if(x.shr(-2147483648n)!==-1n||x.ushr(-1n)!==2147483647n)process.exit(5);"
                 "if(x.next(1n)!==270369n||x.next(270369n)!==67634689n||x.next(67634689n)!==2647435461n)process.exit(6);"
-                "for(const n of [-1n,32n]){for(const f of [x.shl,x.shr,x.ushr]){try{f(1n,n);process.exit(7)}"
-                "catch(e){if(e.message!=='i32-shift-count-out-of-range')process.exit(8)}}}})")
+                "})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const xorshift32="))
-    (is (str/includes? source "BigInt.asIntN(32"))))
+    (is (str/includes? source "BigInt.asIntN(32")))
+  (doseq [count [-1 32]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"integer literal"
+                          (script/emit
+                           {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                            :functions [{:name 'bad :params ['x] :param-types [:i64]
+                                         :result :i64 :effects #{}
+                                         :body (list 'i32-shift-left 'x count)}]})))))
 
 (deftest floating-point-f64-bit-profile-is-explicit-and-sealed
   (let [typed-kir

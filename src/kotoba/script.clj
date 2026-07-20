@@ -279,10 +279,17 @@
       (do (require-arity! op args 1)
           (require-type! (first types) :i64 (first args)) :i64)
 
-      (contains? '#{i32-wrapping-add i32-wrapping-mul i32-xor
-                    i32-shift-left i32-shift-right u32-shift-right} op)
+      (contains? '#{i32-wrapping-add i32-wrapping-mul i32-xor} op)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
+
+      (contains? '#{i32-shift-left i32-shift-right u32-shift-right} op)
+      (do (require-arity! op args 2)
+          (require-type! (first types) :i64 (first args))
+          (when-not (and (integer? (second args)) (<= 0 (second args) 31))
+            (fail! "i32 shift count must be an integer literal in [0,31]"
+                   {:operation op :count (second args)}))
+          :i64)
 
       (= op '=)
       (do (require-arity! op args 2)
