@@ -490,6 +490,32 @@
                                         :functions [{:name 'bad :params [] :param-types []
                                                      :result :string :effects #{} :body unpaired}]})))))
 
+(deftest bounded-string-replacement-is-literal-and-fails-closed
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['replace]
+             :effects #{}
+             :functions [{:name 'replace :params ['value 'needle 'replacement]
+                          :param-types [:string :string :string]
+                          :result :string :effects #{}
+                          :body '(string-replace-all value needle replacement)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.replace('a.$a.$','.','$')!=='a$$a$$')process.exit(2);"
+                "try{x.replace('abc','','x');process.exit(3)}"
+                "catch(e){if(e.message!=='empty-string-replacement-needle')process.exit(4)}"
+                "try{x.replace('x'.repeat(40000),'x','xx');process.exit(5)}"
+                "catch(e){if(e.message!=='string-too-large')process.exit(6)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "stringReplaceAll")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"type mismatch"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
+                          :functions [{:name 'bad :params ['value]
+                                       :param-types [:string] :result :string :effects #{}
+                                       :body '(string-replace-all value 1 "x")}]}))))
+
 (deftest typed-keywords-preserve-canonical-text-without-hashing
   (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['identity 'same?]
                    :effects #{}

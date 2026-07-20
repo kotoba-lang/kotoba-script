@@ -563,6 +563,9 @@
       (= op 'string-concat)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
+      (= op 'string-replace-all)
+      (do (require-arity! op args 3)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
       (= op 'keyword-from-string)
       (do (require-arity! op args 1)
           (require-type! (first types) :string (first args)) :keyword)
@@ -1290,6 +1293,8 @@
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'string-replace-all) (str "stringReplaceAll(" (a (first args)) ","
+                                      (a (second args)) "," (a (nth args 2)) ")")
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
       (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
@@ -1874,6 +1879,10 @@
              "else if(u>=56320&&u<=57343)throw new Error('invalid-utf16');else n+=3;}return n;};"
              "const assertString=v=>{if(typeof v!=='string')throw new Error('invalid-string');"
              "if(utf8Bytes(v)>" max-string-value-bytes ")throw new Error('string-too-large');return v;};"
+             "const stringReplaceAll=(value,needle,replacement)=>{value=assertString(value);"
+             "needle=assertString(needle);replacement=assertString(replacement);"
+             "if(needle.length===0)throw new Error('empty-string-replacement-needle');"
+             "return assertString(value.split(needle).join(replacement));};"
              "const assertStringIndex=v=>{if(!Array.isArray(v)||v.length>" max-compact-graph-items
              ")throw new Error('invalid-string-index');let bytes=0,previous=null;const out=v.map(e=>{"
              "if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-string-index-entry');"
