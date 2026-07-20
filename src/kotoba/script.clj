@@ -502,6 +502,10 @@
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1)) :document)
+      (= op 'document-vector-remove)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :document)
       (= op 'document-contains)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
@@ -1268,6 +1272,7 @@
       (= op 'document-vector-assoc) (str "docVectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
       (= op 'document-vector-conj) (str "docVectorConj(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-drop) (str "docVectorDrop(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-vector-remove) (str "docVectorRemove(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-contains) (str "docContains(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-get) (str "docGet(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-assoc) (str "docAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
@@ -1941,6 +1946,7 @@
              "const docVectorAssoc=(v,index,item)=>{const items=docVectorEntries(v);index=assertI64(index);item=assertDoc(item);if(index<0n||index>=BigInt(items.length))throw new Error('doc-vector-index-out-of-range');const out=[...items];out[Number(index)]=item;return makeDocVector(out);};"
              "const docVectorConj=(v,item)=>{const items=docVectorEntries(v);item=assertDoc(item);if(items.length>=32)throw new Error('doc-vector-too-large');return makeDocVector([...items,item]);};"
              "const docVectorDrop=(v,count)=>{const items=docVectorEntries(v);count=assertI64(count);if(count<0n||count>BigInt(items.length))throw new Error('doc-vector-drop-out-of-range');return makeDocVector(items.slice(Number(count)));};"
+             "const docVectorRemove=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);if(index<0n||index>=BigInt(items.length))throw new Error('doc-vector-index-out-of-range');return makeDocVector(items.filter((_,i)=>i!==Number(index)));};"
              "const docPosition=(v,key)=>{const entries=docMapEntries(v);key=assertKeyword(key);return [entries,key,entries.findIndex(e=>e[0]===key)];};"
              "const docContains=(v,key)=>docPosition(v,key)[2]>=0;"
              "const docGet=(v,key)=>{const [entries,k,i]=docPosition(v,key);return makeGenericOption(docType,i>=0,i>=0?entries[i][1]:undefined);};"
