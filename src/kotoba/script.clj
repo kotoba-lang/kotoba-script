@@ -485,6 +485,23 @@
           :document)
       (= op 'document-count)
       (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :i64)
+      (= op 'document-vector-at)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) [:option :document])
+      (= op 'document-vector-assoc)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1))
+          (require-type! (nth types 2) :document (nth args 2)) :document)
+      (= op 'document-vector-conj)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :document (nth args 1)) :document)
+      (= op 'document-vector-drop)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :document)
       (= op 'document-contains)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
@@ -1244,6 +1261,10 @@
            (str/join "," (map (fn [[key item]] (str "[" (a key) "," (a item) "]"))
                                 (partition 2 args))) "])")
       (= op 'document-count) (str "docCount(" (a (first args)) ")")
+      (= op 'document-vector-at) (str "docVectorAt(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-vector-assoc) (str "docVectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
+      (= op 'document-vector-conj) (str "docVectorConj(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-vector-drop) (str "docVectorDrop(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-contains) (str "docContains(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-get) (str "docGet(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-assoc) (str "docAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
@@ -1910,7 +1931,12 @@
              "for(let i=1;i<sorted.length;i++)if(sorted[i-1][0]===sorted[i][0])throw new Error('duplicate-doc-key');"
              "return assertDoc(['map',sorted]);};"
              "const docMapEntries=v=>{v=assertDoc(v);if(v[0]!=='map')throw new Error('doc-map-required');return v[1];};"
+             "const docVectorEntries=v=>{v=assertDoc(v);if(v[0]!=='vector')throw new Error('doc-vector-required');return v[1];};"
              "const docCount=v=>{v=assertDoc(v);if(v[0]!=='map'&&v[0]!=='vector')throw new Error('doc-container-required');return BigInt(v[1].length);};"
+             "const docVectorAt=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);const ok=index>=0n&&index<BigInt(items.length);return makeGenericOption(docType,ok,ok?items[Number(index)]:undefined);};"
+             "const docVectorAssoc=(v,index,item)=>{const items=docVectorEntries(v);index=assertI64(index);item=assertDoc(item);if(index<0n||index>=BigInt(items.length))throw new Error('doc-vector-index-out-of-range');const out=[...items];out[Number(index)]=item;return makeDocVector(out);};"
+             "const docVectorConj=(v,item)=>{const items=docVectorEntries(v);item=assertDoc(item);if(items.length>=32)throw new Error('doc-vector-too-large');return makeDocVector([...items,item]);};"
+             "const docVectorDrop=(v,count)=>{const items=docVectorEntries(v);count=assertI64(count);if(count<0n||count>BigInt(items.length))throw new Error('doc-vector-drop-out-of-range');return makeDocVector(items.slice(Number(count)));};"
              "const docPosition=(v,key)=>{const entries=docMapEntries(v);key=assertKeyword(key);return [entries,key,entries.findIndex(e=>e[0]===key)];};"
              "const docContains=(v,key)=>docPosition(v,key)[2]>=0;"
              "const docGet=(v,key)=>{const [entries,k,i]=docPosition(v,key);return makeGenericOption(docType,i>=0,i>=0?entries[i][1]:undefined);};"
