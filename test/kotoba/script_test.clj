@@ -1082,6 +1082,38 @@
     (is (str/includes? source "const assertDoc="))
     (is (str/includes? source "const docMerge="))))
 
+(deftest bounded-document-vectors-have-safe-persistent-operations
+  (let [functions
+        [{:name 'items :params [] :param-types [] :result :document :effects #{}
+          :body '(document-vector (document-i64 1) (document-i64 2))}
+         {:name 'first-item :params [] :param-types [] :result :i64 :effects #{}
+          :body '(option-value-of [:option :i64]
+                   (document-i64-value
+                    (option-value-of [:option :document]
+                      (document-vector-at (items) 0) (document-null))) -1)}
+         {:name 'changed :params [] :param-types [] :result :document :effects #{}
+          :body '(document-vector-conj
+                   (document-vector-assoc (items) 1 (document-i64 7))
+                   (document-i64 9))}
+         {:name 'tail :params [] :param-types [] :result :document :effects #{}
+          :body '(document-vector-drop (changed) 1)}
+         {:name 'bad-assoc :params [] :param-types [] :result :document :effects #{}
+          :body '(document-vector-assoc (items) -1 (document-null))}]
+        source (script/emit {:format :kotoba.kir/v4 :entry nil
+                             :exports (mapv :name functions) :effects #{} :functions functions})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({}),v=x.changed(),t=x.tail();"
+                     "if(x['first-item']()!==1n||v[1].length!==3||v[1][1][1]!==7n||t[1].length!==2)process.exit(2);"
+                     "if(!Object.isFrozen(v)||!Object.isFrozen(v[1])||!Object.isFrozen(t))process.exit(3);"
+                     "try{x['bad-assoc']();process.exit(4)}catch(e){if(e.message!=='doc-vector-index-out-of-range')process.exit(5)}"
+                     "})"))]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const docVectorAt="))
+    (is (str/includes? source "const docVectorConj="))))
+
 (deftest bounded-keywords-can-be-created-from-safe-runtime-text
   (let [source (script/emit
                 {:format :kotoba.kir/v4 :entry nil :exports ['context-key]
