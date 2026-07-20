@@ -585,6 +585,12 @@
       (= op 'xml-path-count)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'xml-path-text)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :string (nth args 0))
+          (require-type! (nth types 1) :string (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2))
+          [:option :string])
       (= op 'xml-path-attr)
       (do (require-arity! op args 4)
           (require-type! (nth types 0) :string (nth args 0))
@@ -1314,6 +1320,8 @@
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
       (= op 'keyword-name) (str "keywordName(" (a (first args)) ")")
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
+      (= op 'xml-path-text) (str "xmlPathText(" (a (nth args 0)) "," (a (nth args 1)) ","
+                                 (a (nth args 2)) ")")
       (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
                                  (a (nth args 2)) "," (a (nth args 3)) ")")
       (= op 'decimal-f64-parse) (str "decimalF64Parse(" (a (first args)) ")")
@@ -1990,6 +1998,7 @@
              "const docScalarOption=(tag,v)=>{v=assertDoc(v);const t=Object.freeze(['option',tag]);return makeGenericOption(t,v[0]===tag,v[0]===tag?v[1]:undefined);};"
              "const xmlName=/^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/u;"
              "const xmlWs=c=>c===' '||c==='\\t'||c==='\\n'||c==='\\r';"
+             "const normalizeXmlText=s=>assertString(s.replace(/[ \\t\\r\\n]+/gu,' ').replace(/^ | $/gu,''));"
              "const parseBoundedXml=input=>{const s=assertString(input);let i=0,nodes=0;const out=[];"
              "const skip=()=>{while(i<s.length&&xmlWs(s[i]))i++;};"
              "const comment=()=>{if(!s.startsWith('<!--',i))return false;const e=s.indexOf('-->',i+4);"
@@ -2008,18 +2017,24 @@
              "if(q.charCodeAt(0)!==34&&q.charCodeAt(0)!==39)throw new Error('invalid-xml-attribute');const b=i;"
              "while(i<s.length&&s[i]!==q){if(s[i]==='<'||s[i]==='&')throw new Error('xml-entity-or-markup-rejected');i++;}"
              "if(i>=s.length)throw new Error('unterminated-xml-attribute');attrs[k]=assertString(s.slice(b,i++));}"
-             "out.push(Object.freeze({path,attrs:Object.freeze(attrs)}));if(emptyElement)return;"
-             "for(;;){comments();skip();if(s.startsWith('</',i)){i+=2;const close=name();skip();"
-             "if(close!==tag||s[i++]!=='>')throw new Error('xml-close-mismatch');return;}"
-             "if(s[i]==='<'){element(depth+1,path);continue;}throw new Error('xml-text-rejected');}};"
+             "const record={path,attrs:Object.freeze(attrs),text:''};out.push(record);if(emptyElement)return '';"
+             "const parts=[];for(;;){if(s.startsWith('</',i)){i+=2;const close=name();skip();"
+             "if(close!==tag||s[i++]!=='>')throw new Error('xml-close-mismatch');record.text=normalizeXmlText(parts.join(' '));return record.text;}"
+             "if(s.startsWith('<!--',i)){comment();parts.push(' ');continue;}"
+             "if(s[i]==='<'){parts.push(element(depth+1,path));continue;}"
+             "const b=i;while(i<s.length&&s[i]!=='<')i++;if(i===b)throw new Error('invalid-xml-text');parts.push(s.slice(b,i));}};"
              "comments();if(s.startsWith('<?xml',i)){const e=s.indexOf('?>',i+5);if(e<0)throw new Error('invalid-xml-declaration');"
              "const d=s.slice(i,e+2);if(!/^<\\?xml\\s+version=(?:\"1\\.[01]\"|'1\\.[01]')(?:\\s+encoding=(?:\"(?:UTF-8|utf-8)\"|'(?:UTF-8|utf-8)'))?\\s*\\?>$/u.test(d))"
              "throw new Error('invalid-xml-declaration');i=e+2;}comments();element(1,'');comments();skip();"
-             "if(i!==s.length)throw new Error('xml-trailing-content');return Object.freeze(out);};"
+             "if(i!==s.length)throw new Error('xml-trailing-content');return Object.freeze(out.map(n=>Object.freeze(n)));};"
              "const xmlPath=path=>{path=assertString(path);const p=path.split('/');"
              "if(p.length<1||p.length>" max-xml-path-segments "||p.some(x=>!xmlName.test(x)))throw new Error('invalid-xml-path');return path;};"
              "const xmlPathCount=(xml,path)=>{const p=xmlPath(path);return BigInt(parseBoundedXml(xml).filter(n=>n.path===p).length);};"
              "const xmlStringOption=Object.freeze(['option','string']);"
+             "const xmlPathText=(xml,path,index)=>{const p=xmlPath(path);index=assertI64(index);"
+             "if(index<0n)throw new Error('xml-index-out-of-range');const xs=parseBoundedXml(xml).filter(n=>n.path===p);"
+             "return index<BigInt(xs.length)?makeGenericOption(xmlStringOption,true,xs[Number(index)].text)"
+             ":makeGenericOption(xmlStringOption,false,null);};"
              "const xmlPathAttr=(xml,path,index,attr)=>{const p=xmlPath(path);attr=assertString(attr);"
              "if(!xmlName.test(attr))throw new Error('invalid-xml-name');index=assertI64(index);"
              "if(index<0n)throw new Error('xml-index-out-of-range');const xs=parseBoundedXml(xml).filter(n=>n.path===p);"

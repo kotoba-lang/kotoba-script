@@ -1259,24 +1259,27 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "typedMapLimits:Object.freeze({entries:31})"))))
 
-(deftest bounded-xml-subset-has-exact-path-and-typed-absence-semantics
+(deftest bounded-xml-subset-has-exact-path-text-and-typed-absence-semantics
   (let [option-string [:option :string]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['count-path 'attr]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['count-path 'text 'attr]
              :effects #{}
              :functions
              [{:name 'count-path :params ['xml 'path] :param-types [:string :string]
                :result :i64 :effects #{} :body '(xml-path-count xml path)}
+              {:name 'text :params ['xml 'path 'index]
+               :param-types [:string :string :i64]
+               :result option-string :effects #{}
+               :body '(xml-path-text xml path index)}
               {:name 'attr :params ['xml 'path 'index 'attribute]
                :param-types [:string :string :i64 :string]
                :result option-string :effects #{}
                :body '(xml-path-attr xml path index attribute)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- bounded --><robot name=\"cart\"><link name=\"base\"><inertial><mass value=\"1.5\"/></inertial></link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- bounded --><robot name=\"cart\"><link name=\"base\"> Hello <span>bounded</span> XML </link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot>"
         xml64 (.encodeToString (java.util.Base64/getEncoder) (.getBytes xml "UTF-8"))
         invalid ["<!DOCTYPE robot><robot/>"
                  "<robot><link name=\"a&amp;b\"/></robot>"
-                 "<robot>text</robot>"
                  "<robot a=\"1\" a=\"2\"/>"
                  "<robot><link/></wrong>"
                  "<?unsafe x?><robot/>"
@@ -1294,14 +1297,16 @@
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),xml=Buffer.from('" xml64 "','base64').toString();"
                 "if(x['count-path'](xml,'robot/link')!==2n)process.exit(2);"
-                "if(x['count-path'](xml,'robot/link/inertial/mass')!==1n)process.exit(3);"
-                "const tip=x.attr(xml,'robot/link',1n,'name'),mass=x.attr(xml,'robot/link/inertial/mass',0n,'value'),missing=x.attr(xml,'robot/link',0n,'missing');"
-                "if(!tip[1]||tip[2]!=='tip'||!mass[1]||mass[2]!=='1.5'||missing[1])process.exit(4);"
+                "if(x['count-path'](xml,'robot/link/span')!==1n)process.exit(3);"
+                "const tip=x.attr(xml,'robot/link',1n,'name'),missing=x.attr(xml,'robot/link',0n,'missing');"
+                "const text=x.text(xml,'robot/link',0n),nested=x.text(xml,'robot/link/span',0n),absent=x.text(xml,'robot/link',2n);"
+                "if(!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello bounded XML'||!nested[1]||nested[2]!=='bounded'||absent[1])process.exit(4);"
                 "for(const b of " invalid-js "){let trapped=false;try{x['count-path'](Buffer.from(b,'base64').toString(),'robot')}catch(e){trapped=true}if(!trapped)process.exit(5)}"
                 "for(const f of [()=>x['count-path'](xml,'robot//link'),"
                 "()=>x['count-path'](xml,'" (str/join "/" (repeat 33 "n")) "'),"
                 "()=>x['count-path']('<r a=\"" (apply str (repeat 65536 "x")) "\"/>','r'),"
-                "()=>x.attr(xml,'robot/link',-1n,'name')]){let trapped=false;try{f()}catch(e){trapped=true}if(!trapped)process.exit(6)}})")
+                "()=>x.attr(xml,'robot/link',-1n,'name'),"
+                "()=>x.text(xml,'robot/link',-1n)]){let trapped=false;try{f()}catch(e){trapped=true}if(!trapped)process.exit(6)}})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
