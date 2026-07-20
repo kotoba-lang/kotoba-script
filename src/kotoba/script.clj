@@ -585,6 +585,15 @@
       (= op 'xml-path-count)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'xml-name-count)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'xml-name-text)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :string (nth args 0))
+          (require-type! (nth types 1) :string (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2))
+          [:option :string])
       (= op 'xml-path-text)
       (do (require-arity! op args 3)
           (require-type! (nth types 0) :string (nth args 0))
@@ -1320,6 +1329,9 @@
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
       (= op 'keyword-name) (str "keywordName(" (a (first args)) ")")
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
+      (= op 'xml-name-count) (str "xmlNameCount(" (a (first args)) "," (a (second args)) ")")
+      (= op 'xml-name-text) (str "xmlNameText(" (a (nth args 0)) "," (a (nth args 1)) ","
+                                 (a (nth args 2)) ")")
       (= op 'xml-path-text) (str "xmlPathText(" (a (nth args 0)) "," (a (nth args 1)) ","
                                  (a (nth args 2)) ")")
       (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
@@ -2031,6 +2043,13 @@
              "if(p.length<1||p.length>" max-xml-path-segments "||p.some(x=>!xmlName.test(x)))throw new Error('invalid-xml-path');return path;};"
              "const xmlPathCount=(xml,path)=>{const p=xmlPath(path);return BigInt(parseBoundedXml(xml).filter(n=>n.path===p).length);};"
              "const xmlStringOption=Object.freeze(['option','string']);"
+             "const xmlElementName=n=>n.path.slice(n.path.lastIndexOf('/')+1);"
+             "const xmlCheckedName=name=>{name=assertString(name);if(!xmlName.test(name))throw new Error('invalid-xml-name');return name;};"
+             "const xmlNameCount=(xml,name)=>{name=xmlCheckedName(name);return BigInt(parseBoundedXml(xml).filter(n=>xmlElementName(n)===name).length);};"
+             "const xmlNameText=(xml,name,index)=>{name=xmlCheckedName(name);index=assertI64(index);"
+             "if(index<0n)throw new Error('xml-index-out-of-range');const xs=parseBoundedXml(xml).filter(n=>xmlElementName(n)===name);"
+             "return index<BigInt(xs.length)?makeGenericOption(xmlStringOption,true,xs[Number(index)].text)"
+             ":makeGenericOption(xmlStringOption,false,null);};"
              "const xmlPathText=(xml,path,index)=>{const p=xmlPath(path);index=assertI64(index);"
              "if(index<0n)throw new Error('xml-index-out-of-range');const xs=parseBoundedXml(xml).filter(n=>n.path===p);"
              "return index<BigInt(xs.length)?makeGenericOption(xmlStringOption,true,xs[Number(index)].text)"
