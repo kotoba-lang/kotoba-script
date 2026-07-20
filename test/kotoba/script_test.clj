@@ -1164,7 +1164,26 @@
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source
-                       "decimalF64Limits:Object.freeze({bytes:64,finiteOnly:true,rounding:'nearest-ties-even'})"))
+                       "decimalF64Limits:Object.freeze({bytes:64,vector3Bytes:194,finiteOnly:true,rounding:'nearest-ties-even'})"))
+    (is (not (re-find #"parseFloat|eval|Function" source)))))
+
+(deftest bounded-decimal-f64x3-parser-is-fixed-width-and-atomic
+  (let [result-type [:option [:vector [:f64 :f64 :f64]]]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['parse]
+             :effects #{}
+             :functions [{:name 'parse :params ['value] :param-types [:string]
+                          :result result-type :effects #{}
+                          :body '(decimal-f64x3-parse value)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),ok=x.parse(' -0  1.5\\t5e-324 ');"
+                "if(!ok[1]||!Object.is(ok[2][1],-0)||ok[2][2]!==1.5||ok[2][3]!==Number.MIN_VALUE)process.exit(2);"
+                "for(const s of ['', '1 2', '1 2 3 4', '1,2,3', '1 NaN 3', '1 1e309 3', '1　2　3', ' '.repeat(195)])"
+                "if(x.parse(s)[1])process.exit(3)})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
+    (is (str/includes? source "vector3Bytes:194"))
     (is (not (re-find #"parseFloat|eval|Function" source)))))
 
 (defn -main [& _]

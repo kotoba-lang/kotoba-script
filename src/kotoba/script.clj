@@ -27,6 +27,7 @@
 (def ^:private max-xml-attributes 32)
 (def ^:private max-xml-path-segments 32)
 (def ^:private max-decimal-f64-bytes 64)
+(def ^:private max-decimal-f64x3-bytes 194)
 
 (declare fail!)
 
@@ -454,6 +455,10 @@
       (do (require-arity! op args 1)
           (require-type! (first types) :string (first args))
           [:option :f64])
+      (= op 'decimal-f64x3-parse)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :string (first args))
+          [:option [:vector [:f64 :f64 :f64]]])
 
       (= op 'f64-to-bits)
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
@@ -1129,6 +1134,7 @@
       (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
                                  (a (nth args 2)) "," (a (nth args 3)) ")")
       (= op 'decimal-f64-parse) (str "decimalF64Parse(" (a (first args)) ")")
+      (= op 'decimal-f64x3-parse) (str "decimalF64x3Parse(" (a (first args)) ")")
       (= op 'f64-to-bits) (str "f64ToBits(" (a (first args)) ")")
       (= op 'f64-from-bits) (str "f64FromBits(" (a (first args)) ")")
       (= op 'i64-to-f64-checked) (str "i64ToF64Checked(" (a (first args)) ")")
@@ -1386,6 +1392,7 @@
                     ",pathSegments:" max-xml-path-segments "})"))
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",decimalF64Limits:Object.freeze({bytes:" max-decimal-f64-bytes
+                    ",vector3Bytes:" max-decimal-f64x3-bytes
                     ",finiteOnly:true,rounding:'nearest-ties-even'})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
@@ -1743,10 +1750,20 @@
              "?makeGenericOption(xmlStringOption,true,a[attr]):makeGenericOption(xmlStringOption,false,null);};"
              "const decimalF64Pattern=/^[+-]?(?:(?:[0-9]+(?:\\.[0-9]*)?)|(?:\\.[0-9]+))(?:[eE][+-]?[0-9]{1,3})?$/u;"
              "const decimalF64Option=Object.freeze(['option','f64']);"
-             "const decimalF64Parse=value=>{value=assertString(value);if(utf8Bytes(value)>" max-decimal-f64-bytes
-             "||!decimalF64Pattern.test(value))return makeGenericOption(decimalF64Option,false,null);"
-             "const parsed=Number(value);return Number.isFinite(parsed)?makeGenericOption(decimalF64Option,true,parsed)"
+             "const decimalF64Value=value=>{if(utf8Bytes(value)>" max-decimal-f64-bytes
+             "||!decimalF64Pattern.test(value))return null;const parsed=Number(value);return Number.isFinite(parsed)?parsed:null;};"
+             "const decimalF64Parse=value=>{value=assertString(value);const parsed=decimalF64Value(value);"
+             "return parsed!==null?makeGenericOption(decimalF64Option,true,parsed)"
              ":makeGenericOption(decimalF64Option,false,null);};"
+             "const decimalF64x3Vector=Object.freeze(['vector',Object.freeze(['f64','f64','f64'])]);"
+             "const decimalF64x3Option=Object.freeze(['option',decimalF64x3Vector]);"
+             "const decimalF64x3Parse=value=>{value=assertString(value);if(utf8Bytes(value)>" max-decimal-f64x3-bytes
+             "||!/^[0-9eE+.\\- \\t\\r\\n]+$/u.test(value))return makeGenericOption(decimalF64x3Option,false,null);"
+             "const stripped=value.replace(/^[ \\t\\r\\n]+|[ \\t\\r\\n]+$/gu,'');"
+             "const parts=stripped===''?[]:stripped.split(/[ \\t\\r\\n]+/u);if(parts.length!==3)"
+             "return makeGenericOption(decimalF64x3Option,false,null);const items=parts.map(decimalF64Value);"
+             "return items.every(item=>item!==null)?makeGenericOption(decimalF64x3Option,true,makeHeterogeneousVector(decimalF64x3Vector,items))"
+             ":makeGenericOption(decimalF64x3Option,false,null);};"
              "const assertKeyword=v=>{if(typeof v!=='string'||v.length<2||v[0]!==':'||"
              "v.includes('::')||/\\s|[\\[\\]{}()\"',;@`~^\\\\]/u.test(v))"
              "throw new Error('invalid-keyword');if(utf8Bytes(v)>" max-keyword-bytes
