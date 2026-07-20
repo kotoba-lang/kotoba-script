@@ -1719,7 +1719,7 @@
              "if(close!==tag||s[i++]!=='>')throw new Error('xml-close-mismatch');return;}"
              "if(s[i]==='<'){element(depth+1,path);continue;}throw new Error('xml-text-rejected');}};"
              "comments();if(s.startsWith('<?xml',i)){const e=s.indexOf('?>',i+5);if(e<0)throw new Error('invalid-xml-declaration');"
-             "const d=s.slice(i,e+2);if(!/^<\\?xml\\s+version=(?:\"1\\.[01]\"|'1\\.[01]')(?:\\s+encoding=(?:\"UTF-8\"|'UTF-8'))?\\s*\\?>$/u.test(d))"
+             "const d=s.slice(i,e+2);if(!/^<\\?xml\\s+version=(?:\"1\\.[01]\"|'1\\.[01]')(?:\\s+encoding=(?:\"(?:UTF-8|utf-8)\"|'(?:UTF-8|utf-8)'))?\\s*\\?>$/u.test(d))"
              "throw new Error('invalid-xml-declaration');i=e+2;}comments();element(1,'');comments();skip();"
              "if(i!==s.length)throw new Error('xml-trailing-content');return Object.freeze(out);};"
              "const xmlPath=path=>{path=assertString(path);const p=path.split('/');"

@@ -1107,7 +1107,7 @@
                :body '(xml-path-attr xml path index attribute)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        xml "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!-- bounded --><robot name=\"cart\"><link name=\"base\"><inertial><mass value=\"1.5\"/></inertial></link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- bounded --><robot name=\"cart\"><link name=\"base\"><inertial><mass value=\"1.5\"/></inertial></link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot>"
         xml64 (.encodeToString (java.util.Base64/getEncoder) (.getBytes xml "UTF-8"))
         invalid ["<!DOCTYPE robot><robot/>"
                  "<robot><link name=\"a&amp;b\"/></robot>"
