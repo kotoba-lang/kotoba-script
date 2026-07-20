@@ -1261,11 +1261,18 @@
 
 (deftest bounded-xml-subset-has-exact-path-text-and-typed-absence-semantics
   (let [option-string [:option :string]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['count-path 'text 'attr]
+        kir {:format :kotoba.kir/v4 :entry nil
+             :exports ['count-path 'count-name 'name-text 'text 'attr]
              :effects #{}
              :functions
              [{:name 'count-path :params ['xml 'path] :param-types [:string :string]
                :result :i64 :effects #{} :body '(xml-path-count xml path)}
+              {:name 'count-name :params ['xml 'name] :param-types [:string :string]
+               :result :i64 :effects #{} :body '(xml-name-count xml name)}
+              {:name 'name-text :params ['xml 'name 'index]
+               :param-types [:string :string :i64]
+               :result option-string :effects #{}
+               :body '(xml-name-text xml name index)}
               {:name 'text :params ['xml 'path 'index]
                :param-types [:string :string :i64]
                :result option-string :effects #{}
@@ -1298,15 +1305,19 @@
                 "').then(m=>{const x=m.instantiateKotoba({}),xml=Buffer.from('" xml64 "','base64').toString();"
                 "if(x['count-path'](xml,'robot/link')!==2n)process.exit(2);"
                 "if(x['count-path'](xml,'robot/link/span')!==1n)process.exit(3);"
+                "if(x['count-name'](xml,'link')!==2n||x['count-name'](xml,'span')!==1n)process.exit(7);"
                 "const tip=x.attr(xml,'robot/link',1n,'name'),missing=x.attr(xml,'robot/link',0n,'missing');"
                 "const text=x.text(xml,'robot/link',0n),nested=x.text(xml,'robot/link/span',0n),absent=x.text(xml,'robot/link',2n);"
-                "if(!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello bounded XML'||!nested[1]||nested[2]!=='bounded'||absent[1])process.exit(4);"
+                "const named=x['name-text'](xml,'link',0n),namedAbsent=x['name-text'](xml,'link',2n);"
+                "if(!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello bounded XML'||!nested[1]||nested[2]!=='bounded'||absent[1]||!named[1]||named[2]!=='Hello bounded XML'||namedAbsent[1])process.exit(4);"
                 "for(const b of " invalid-js "){let trapped=false;try{x['count-path'](Buffer.from(b,'base64').toString(),'robot')}catch(e){trapped=true}if(!trapped)process.exit(5)}"
                 "for(const f of [()=>x['count-path'](xml,'robot//link'),"
                 "()=>x['count-path'](xml,'" (str/join "/" (repeat 33 "n")) "'),"
                 "()=>x['count-path']('<r a=\"" (apply str (repeat 65536 "x")) "\"/>','r'),"
                 "()=>x.attr(xml,'robot/link',-1n,'name'),"
-                "()=>x.text(xml,'robot/link',-1n)]){let trapped=false;try{f()}catch(e){trapped=true}if(!trapped)process.exit(6)}})")
+                "()=>x.text(xml,'robot/link',-1n),"
+                "()=>x['name-text'](xml,'link',-1n),"
+                "()=>x['count-name'](xml,'bad/name')]){let trapped=false;try{f()}catch(e){trapped=true}if(!trapped)process.exit(6)}})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
