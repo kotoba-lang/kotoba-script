@@ -1091,7 +1091,9 @@
          {:name 'external-count :params ['value] :param-types [:document]
           :result :i64 :effects #{} :body '(document-count value)}
          {:name 'kind :params ['value] :param-types [:document]
-          :result :keyword :effects #{} :body '(document-kind value)}]
+          :result :keyword :effects #{} :body '(document-kind value)}
+         {:name 'same :params ['left 'right] :param-types [:document :document]
+          :result :bool :effects #{} :body '(document-equal? left right)}]
         source (script/emit {:format :kotoba.kir/v4 :entry nil
                              :exports (mapv :name functions) :effects #{} :functions functions})
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
@@ -1101,6 +1103,7 @@
          (str "import('data:text/javascript;base64," encoded
               "').then(m=>{const x=m.instantiateKotoba({}),d=x.doc();"
               "if(x['type-name']()!=='Annotation'||x['updated-count']()!==3n||x.kind(d)!==':map')process.exit(2);"
+              "const same=['map',[[':items',['vector',[['i64',1n],['string','x']]]]]],different=['map',[[':items',['vector',[['i64',2n],['string','x']]]]]];if(x.same(same,same)!==true||x.same(same,different)!==false||x.same(['f64',-0],['f64',0])!==true)process.exit(7);"
               "for(const [v,k] of [[['null'],':null'],[['bool',true],':bool'],[['i64',1n],':i64'],[['f64',1],':f64'],[['string','x'],':string'],[['keyword',':x'],':keyword'],[['vector',[]],':vector']])if(x.kind(v)!==k)process.exit(6);"
               "if(!Object.isFrozen(d)||!Object.isFrozen(d[1])||!Object.isFrozen(d[1][0]))process.exit(3);"
               "for(const bad of [{type:'Annotation'},['map',[[':b',['null']],[':a',['null']]]],['f64',Infinity]]){let rejected=false;"
@@ -1110,7 +1113,8 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const assertDoc="))
     (is (str/includes? source "const docMerge="))
-    (is (str/includes? source "const docKind="))))
+    (is (str/includes? source "const docKind="))
+    (is (str/includes? source "const docEqual="))))
 
 (deftest bounded-document-vectors-have-safe-persistent-operations
   (let [functions

@@ -487,6 +487,10 @@
       (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :i64)
       (= op 'document-kind)
       (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :keyword)
+      (= op 'document-equal?)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :document arg))
+          :bool)
       (= op 'document-vector-at)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
@@ -1281,6 +1285,7 @@
                                 (partition 2 args))) "])")
       (= op 'document-count) (str "docCount(" (a (first args)) ")")
       (= op 'document-kind) (str "docKind(" (a (first args)) ")")
+      (= op 'document-equal?) (str "docEqual(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-at) (str "docVectorAt(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-map-entry-at) (str "docMapEntryAt(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-assoc) (str "docVectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
@@ -1964,6 +1969,7 @@
              "const docVectorEntries=v=>{v=assertDoc(v);if(v[0]!=='vector')throw new Error('doc-vector-required');return v[1];};"
              "const docCount=v=>{v=assertDoc(v);if(v[0]!=='map'&&v[0]!=='vector')throw new Error('doc-container-required');return BigInt(v[1].length);};"
              "const docKind=v=>assertKeyword(':'+assertDoc(v)[0]);"
+             "const docEqual=(a,b)=>{a=assertDoc(a);b=assertDoc(b);const eq=(x,y)=>{if(x[0]!==y[0])return false;const t=x[0];if(t==='null')return true;if(t!=='vector'&&t!=='map')return x[1]===y[1];if(x[1].length!==y[1].length)return false;if(t==='vector'){for(let i=0;i<x[1].length;i++)if(!eq(x[1][i],y[1][i]))return false;return true;}for(let i=0;i<x[1].length;i++)if(x[1][i][0]!==y[1][i][0]||!eq(x[1][i][1],y[1][i][1]))return false;return true;};return eq(a,b);};"
              "const docVectorAt=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);const ok=index>=0n&&index<BigInt(items.length);return makeGenericOption(docType,ok,ok?items[Number(index)]:undefined);};"
              "const docMapEntryAt=(v,index)=>{const items=docMapEntries(v);index=assertI64(index);"
              "const ok=index>=0n&&index<BigInt(items.length);const entry=ok?items[Number(index)]:null;"
