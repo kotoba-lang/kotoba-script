@@ -1283,9 +1283,13 @@
                :body '(xml-path-attr xml path index attribute)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- bounded --><robot name=\"cart\"><link name=\"base\"> Hello <span>bounded</span> XML </link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot>"
+        xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- bounded --><!DOCTYPE html><html><robot name=\"cart\"><link name=\"base\"> Hello <span>bounded</span> XML </link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot></html>"
         xml64 (.encodeToString (java.util.Base64/getEncoder) (.getBytes xml "UTF-8"))
         invalid ["<!DOCTYPE robot><robot/>"
+                 "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\"><html/>"
+                 "<!DOCTYPE html SYSTEM \"about:legacy-compat\"><html/>"
+                 "<!DOCTYPE html [<!ENTITY x \"unsafe\">]><html/>"
+                 "<!DOCTYPE html><!DOCTYPE html><html/>"
                  "<robot><link name=\"a&amp;b\"/></robot>"
                  "<robot a=\"1\" a=\"2\"/>"
                  "<robot><link/></wrong>"
@@ -1303,19 +1307,19 @@
         invalid-js (str "[" (str/join "," (map pr-str invalid64)) "]")
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),xml=Buffer.from('" xml64 "','base64').toString();"
-                "if(x['count-path'](xml,'robot/link')!==2n)process.exit(2);"
-                "if(x['count-path'](xml,'robot/link/span')!==1n)process.exit(3);"
+                "if(x['count-path'](xml,'html/robot/link')!==2n)process.exit(2);"
+                "if(x['count-path'](xml,'html/robot/link/span')!==1n)process.exit(3);"
                 "if(x['count-name'](xml,'link')!==2n||x['count-name'](xml,'span')!==1n)process.exit(7);"
-                "const tip=x.attr(xml,'robot/link',1n,'name'),missing=x.attr(xml,'robot/link',0n,'missing');"
-                "const text=x.text(xml,'robot/link',0n),nested=x.text(xml,'robot/link/span',0n),absent=x.text(xml,'robot/link',2n);"
+                "const tip=x.attr(xml,'html/robot/link',1n,'name'),missing=x.attr(xml,'html/robot/link',0n,'missing');"
+                "const text=x.text(xml,'html/robot/link',0n),nested=x.text(xml,'html/robot/link/span',0n),absent=x.text(xml,'html/robot/link',2n);"
                 "const named=x['name-text'](xml,'link',0n),namedAbsent=x['name-text'](xml,'link',2n);"
                 "if(!tip[1]||tip[2]!=='tip'||missing[1]||!text[1]||text[2]!=='Hello bounded XML'||!nested[1]||nested[2]!=='bounded'||absent[1]||!named[1]||named[2]!=='Hello bounded XML'||namedAbsent[1])process.exit(4);"
                 "for(const b of " invalid-js "){let trapped=false;try{x['count-path'](Buffer.from(b,'base64').toString(),'robot')}catch(e){trapped=true}if(!trapped)process.exit(5)}"
                 "for(const f of [()=>x['count-path'](xml,'robot//link'),"
                 "()=>x['count-path'](xml,'" (str/join "/" (repeat 33 "n")) "'),"
                 "()=>x['count-path']('<r a=\"" (apply str (repeat 65536 "x")) "\"/>','r'),"
-                "()=>x.attr(xml,'robot/link',-1n,'name'),"
-                "()=>x.text(xml,'robot/link',-1n),"
+                "()=>x.attr(xml,'html/robot/link',-1n,'name'),"
+                "()=>x.text(xml,'html/robot/link',-1n),"
                 "()=>x['name-text'](xml,'link',-1n),"
                 "()=>x['count-name'](xml,'bad/name')]){let trapped=false;try{f()}catch(e){trapped=true}if(!trapped)process.exit(6)}})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
