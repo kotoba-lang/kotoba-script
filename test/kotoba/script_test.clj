@@ -1089,7 +1089,9 @@
                       (document-map :creator (document-string "alice")))
                     :enabled))}
          {:name 'external-count :params ['value] :param-types [:document]
-          :result :i64 :effects #{} :body '(document-count value)}]
+          :result :i64 :effects #{} :body '(document-count value)}
+         {:name 'kind :params ['value] :param-types [:document]
+          :result :keyword :effects #{} :body '(document-kind value)}]
         source (script/emit {:format :kotoba.kir/v4 :entry nil
                              :exports (mapv :name functions) :effects #{} :functions functions})
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
@@ -1098,7 +1100,8 @@
          "node" "--input-type=module" "-e"
          (str "import('data:text/javascript;base64," encoded
               "').then(m=>{const x=m.instantiateKotoba({}),d=x.doc();"
-              "if(x['type-name']()!=='Annotation'||x['updated-count']()!==3n)process.exit(2);"
+              "if(x['type-name']()!=='Annotation'||x['updated-count']()!==3n||x.kind(d)!==':map')process.exit(2);"
+              "for(const [v,k] of [[['null'],':null'],[['bool',true],':bool'],[['i64',1n],':i64'],[['f64',1],':f64'],[['string','x'],':string'],[['keyword',':x'],':keyword'],[['vector',[]],':vector']])if(x.kind(v)!==k)process.exit(6);"
               "if(!Object.isFrozen(d)||!Object.isFrozen(d[1])||!Object.isFrozen(d[1][0]))process.exit(3);"
               "for(const bad of [{type:'Annotation'},['map',[[':b',['null']],[':a',['null']]]],['f64',Infinity]]){let rejected=false;"
               "try{x['external-count'](bad)}catch(e){rejected=true}if(!rejected)process.exit(4);}"
@@ -1106,7 +1109,8 @@
               "try{x['external-count'](cycle)}catch(e){rejected=true}if(!rejected)process.exit(5);})"))]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const assertDoc="))
-    (is (str/includes? source "const docMerge="))))
+    (is (str/includes? source "const docMerge="))
+    (is (str/includes? source "const docKind="))))
 
 (deftest bounded-document-vectors-have-safe-persistent-operations
   (let [functions
