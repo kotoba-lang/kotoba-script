@@ -1094,6 +1094,54 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "typedMapLimits:Object.freeze({entries:31})"))))
 
+(deftest bounded-xml-subset-has-exact-path-and-typed-absence-semantics
+  (let [option-string [:option :string]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['count-path 'attr]
+             :effects #{}
+             :functions
+             [{:name 'count-path :params ['xml 'path] :param-types [:string :string]
+               :result :i64 :effects #{} :body '(xml-path-count xml path)}
+              {:name 'attr :params ['xml 'path 'index 'attribute]
+               :param-types [:string :string :i64 :string]
+               :result option-string :effects #{}
+               :body '(xml-path-attr xml path index attribute)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        xml "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!-- bounded --><robot name=\"cart\"><link name=\"base\"><inertial><mass value=\"1.5\"/></inertial></link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot>"
+        xml64 (.encodeToString (java.util.Base64/getEncoder) (.getBytes xml "UTF-8"))
+        invalid ["<!DOCTYPE robot><robot/>"
+                 "<robot><link name=\"a&amp;b\"/></robot>"
+                 "<robot>text</robot>"
+                 "<robot a=\"1\" a=\"2\"/>"
+                 "<robot><link/></wrong>"
+                 "<?unsafe x?><robot/>"
+                 "<robot><![CDATA[x]]></robot>"
+                 "<robot/>trailing"
+                 (str (apply str (repeat 33 "<n>"))
+                      (apply str (repeat 33 "</n>")))
+                 (str "<robot "
+                      (str/join " " (map #(str "a" % "=\"x\"") (range 33)))
+                      "/>")
+                 (str "<robot>" (apply str (repeat 2048 "<n/>")) "</robot>")]
+        invalid64 (mapv #(.encodeToString (java.util.Base64/getEncoder)
+                                         (.getBytes ^String % "UTF-8")) invalid)
+        invalid-js (str "[" (str/join "," (map pr-str invalid64)) "]")
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),xml=Buffer.from('" xml64 "','base64').toString();"
+                "if(x['count-path'](xml,'robot/link')!==2n)process.exit(2);"
+                "if(x['count-path'](xml,'robot/link/inertial/mass')!==1n)process.exit(3);"
+                "const tip=x.attr(xml,'robot/link',1n,'name'),mass=x.attr(xml,'robot/link/inertial/mass',0n,'value'),missing=x.attr(xml,'robot/link',0n,'missing');"
+                "if(!tip[1]||tip[2]!=='tip'||!mass[1]||mass[2]!=='1.5'||missing[1])process.exit(4);"
+                "for(const b of " invalid-js "){let trapped=false;try{x['count-path'](Buffer.from(b,'base64').toString(),'robot')}catch(e){trapped=true}if(!trapped)process.exit(5)}"
+                "for(const f of [()=>x['count-path'](xml,'robot//link'),"
+                "()=>x['count-path'](xml,'" (str/join "/" (repeat 33 "n")) "'),"
+                "()=>x['count-path']('<r a=\"" (apply str (repeat 65536 "x")) "\"/>','r'),"
+                "()=>x.attr(xml,'robot/link',-1n,'name')]){let trapped=false;try{f()}catch(e){trapped=true}if(!trapped)process.exit(6)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
+    (is (str/includes? source "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
+    (is (not (re-find #"DOMParser|document|fetch|XMLHttpRequest" source)))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
     (System/exit (if (pos? (+ fail error)) 1 0))))
