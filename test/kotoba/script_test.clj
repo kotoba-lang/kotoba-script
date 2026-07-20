@@ -1044,6 +1044,44 @@
     (is (str/includes? source "const assertStringIndex="))
     (is (str/includes? source "const disjointSetI64Union="))))
 
+(deftest bounded-canonical-documents-are-persistent-and-reject-host-objects
+  (let [functions
+        [{:name 'doc :params [] :param-types [] :result :document :effects #{}
+          :body '(document-map :type (document-string "Annotation")
+                               :target (document-string "urn:test")
+                               :enabled (document-bool true))}
+         {:name 'type-name :params [] :param-types [] :result :string :effects #{}
+          :body '(option-value-of [:option :string]
+                   (document-string-value
+                    (option-value-of [:option :document]
+                      (document-get (doc) :type) (document-null)))
+                   "missing")}
+         {:name 'updated-count :params [] :param-types [] :result :i64 :effects #{}
+          :body '(document-count
+                   (document-dissoc
+                    (document-merge (doc)
+                      (document-map :creator (document-string "alice")))
+                    :enabled))}
+         {:name 'external-count :params ['value] :param-types [:document]
+          :result :i64 :effects #{} :body '(document-count value)}]
+        source (script/emit {:format :kotoba.kir/v4 :entry nil
+                             :exports (mapv :name functions) :effects #{} :functions functions})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result
+        (shell/sh
+         "node" "--input-type=module" "-e"
+         (str "import('data:text/javascript;base64," encoded
+              "').then(m=>{const x=m.instantiateKotoba({}),d=x.doc();"
+              "if(x['type-name']()!=='Annotation'||x['updated-count']()!==3n)process.exit(2);"
+              "if(!Object.isFrozen(d)||!Object.isFrozen(d[1])||!Object.isFrozen(d[1][0]))process.exit(3);"
+              "for(const bad of [{type:'Annotation'},['map',[[':b',['null']],[':a',['null']]]],['f64',Infinity]]){let rejected=false;"
+              "try{x['external-count'](bad)}catch(e){rejected=true}if(!rejected)process.exit(4);}"
+              "const cycle=['vector',[]];cycle[1].push(cycle);let rejected=false;"
+              "try{x['external-count'](cycle)}catch(e){rejected=true}if(!rejected)process.exit(5);})"))]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const assertDoc="))
+    (is (str/includes? source "const docMerge="))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo
