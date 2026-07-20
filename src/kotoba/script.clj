@@ -9,7 +9,7 @@
 (def floating-point-policy "ieee-754-f32-f64-v7")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
-                             :vector-i64 :vector-f64 :string-index :disjoint-set-i64})
+                             :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
@@ -24,6 +24,10 @@
 (def ^:private max-record-fields 32)
 (def ^:private max-compact-graph-items 128)
 (def ^:private max-string-index-key-bytes 65536)
+(def ^:private max-document-depth 8)
+(def ^:private max-document-nodes 256)
+(def ^:private max-document-container-items 32)
+(def ^:private max-document-utf8-bytes 65536)
 (def ^:private max-xml-nodes 2048)
 (def ^:private max-xml-depth 32)
 (def ^:private max-xml-attributes 32)
@@ -167,7 +171,7 @@
 (defn- type-js [type]
   (validate-value-type! type)
   (cond
-    (keyword? type) (pr-str (name type))
+    (keyword? type) (pr-str (if (= type :document) "doc" (name type)))
     (parametric-result-type? type)
     (str "Object.freeze(['result'," (type-js (second type)) ","
          (type-js (nth type 2)) "])" )
@@ -212,6 +216,7 @@
            :vector-f64 "assertVectorF64("
            :string-index "assertStringIndex("
            :disjoint-set-i64 "assertDisjointSetI64("
+           :document "assertDoc("
            "assertI64(") expression ")")))
 
 (defn- utf8-byte-count
@@ -450,6 +455,69 @@
           (require-type! (nth types 0) :disjoint-set-i64 (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1))
           (require-type! (nth types 2) :i64 (nth args 2)) [:option :disjoint-set-i64])
+
+      (contains? '#{document-null} op)
+      (do (require-arity! op args 0) :document)
+      (= op 'document-bool)
+      (do (require-arity! op args 1) (require-type! (first types) :bool (first args)) :document)
+      (= op 'document-i64)
+      (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :document)
+      (= op 'document-f64)
+      (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :document)
+      (= op 'document-string)
+      (do (require-arity! op args 1) (require-type! (first types) :string (first args)) :document)
+      (= op 'document-keyword)
+      (do (require-arity! op args 1) (require-type! (first types) :keyword (first args)) :document)
+      (= op 'document-vector)
+      (do (doseq [[arg type] (map vector args types)] (require-type! type :document arg))
+          (when (> (count args) max-document-container-items)
+            (fail! "KIR document vector exceeds item limit" {:items (count args)}))
+          :document)
+      (= op 'document-map)
+      (do (when (odd? (count args))
+            (fail! "KIR document map requires key/value pairs" {:node args}))
+          (doseq [[[key-form value-form] [key-type value-type]]
+                  (map vector (partition 2 args) (partition 2 types))]
+            (require-type! key-type :keyword key-form)
+            (require-type! value-type :document value-form))
+          (when (> (quot (count args) 2) max-document-container-items)
+            (fail! "KIR document map exceeds entry limit" {:entries (quot (count args) 2)}))
+          :document)
+      (= op 'document-count)
+      (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :i64)
+      (= op 'document-contains)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :keyword (nth args 1)) :bool)
+      (= op 'document-get)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :keyword (nth args 1)) [:option :document])
+      (= op 'document-assoc)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :keyword (nth args 1))
+          (require-type! (nth types 2) :document (nth args 2)) :document)
+      (= op 'document-dissoc)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :document (nth args 0))
+          (require-type! (nth types 1) :keyword (nth args 1)) :document)
+      (= op 'document-merge)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :document arg))
+          :document)
+      (= op 'document-string-value)
+      (do (require-arity! op args 1) (require-type! (first types) :document (first args))
+          [:option :string])
+      (= op 'document-bool-value)
+      (do (require-arity! op args 1) (require-type! (first types) :document (first args))
+          [:option :bool])
+      (= op 'document-i64-value)
+      (do (require-arity! op args 1) (require-type! (first types) :document (first args))
+          [:option :i64])
+      (= op 'document-f64-value)
+      (do (require-arity! op args 1) (require-type! (first types) :document (first args))
+          [:option :f64])
 
       (contains? '#{< > <= >=} op)
       (do (require-arity! op args 2)
@@ -1161,6 +1229,27 @@
       (= op 'disjoint-set-i64-new) (str "makeDisjointSetI64(" (a (first args)) ")")
       (= op 'disjoint-set-i64-count) (str "BigInt(assertDisjointSetI64(" (a (first args)) ")[0].length)")
       (= op 'disjoint-set-i64-union) (str "disjointSetI64Union(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
+      (= op 'document-null) "docNull"
+      (= op 'document-bool) (str "makeDocScalar('bool'," (a (first args)) ")")
+      (= op 'document-i64) (str "makeDocScalar('i64'," (a (first args)) ")")
+      (= op 'document-f64) (str "makeDocScalar('f64'," (a (first args)) ")")
+      (= op 'document-string) (str "makeDocScalar('string'," (a (first args)) ")")
+      (= op 'document-keyword) (str "makeDocScalar('keyword'," (a (first args)) ")")
+      (= op 'document-vector) (str "makeDocVector([" (str/join "," (map a args)) "])")
+      (= op 'document-map)
+      (str "makeDocMap(["
+           (str/join "," (map (fn [[key item]] (str "[" (a key) "," (a item) "]"))
+                                (partition 2 args))) "])")
+      (= op 'document-count) (str "docCount(" (a (first args)) ")")
+      (= op 'document-contains) (str "docContains(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-get) (str "docGet(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-assoc) (str "docAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
+      (= op 'document-dissoc) (str "docDissoc(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-merge) (str "docMerge(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-string-value) (str "docScalarOption('string'," (a (first args)) ")")
+      (= op 'document-bool-value) (str "docScalarOption('bool'," (a (first args)) ")")
+      (= op 'document-i64-value) (str "docScalarOption('i64'," (a (first args)) ")")
+      (= op 'document-f64-value) (str "docScalarOption('f64'," (a (first args)) ")")
       (= op 'pair) (str "Object.freeze([" (a (first args)) "," (a (second args)) "])")
       (= op 'pair-first) (str (a (first args)) "[0]")
       (= op 'pair-second) (str (a (first args)) "[1]")
@@ -1586,6 +1675,7 @@
              "if(t==='vector-f64')return assertVectorF64(v);"
              "if(t==='string-index')return assertStringIndex(v);"
              "if(t==='disjoint-set-i64')return assertDisjointSetI64(v);"
+             "if(t==='doc')return assertDoc(v);"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='vector'&&Array.isArray(t[1])){"
              "if(t[1].length>" max-heterogeneous-vector-items
              "||!Array.isArray(v)||v.length!==t[1].length+1||!sameType(v[0],t))"
@@ -1784,6 +1874,48 @@
              "let child=b,parent=a;if(v[1][a]<v[1][b]){child=a;parent=b;}const parents=v[0].slice(),ranks=v[1].slice();"
              "parents[child]=BigInt(parent);if(v[1][a]===v[1][b])ranks[parent]+=1n;"
              "return makeGenericOption(t,true,assertDisjointSetI64([parents,ranks]));};"
+             "const docType=Object.freeze(['option','doc']);"
+             "const docNull=Object.freeze(['null']);"
+             "const assertDoc=v=>{const state={nodes:0,bytes:0,seen:new WeakSet()};"
+             "const walk=(x,d)=>{if(d>" max-document-depth ")throw new Error('doc-depth-limit');"
+             "if(!Array.isArray(x)||x.length<1||typeof x[0]!=='string')throw new Error('invalid-doc-node');"
+             "if(state.seen.has(x))throw new Error('doc-shared-or-cyclic');state.seen.add(x);"
+             "if(++state.nodes>" max-document-nodes ")throw new Error('doc-node-limit');const tag=x[0];"
+             "if(tag==='null'){if(x.length!==1)throw new Error('invalid-doc-null');return docNull;}"
+             "if(tag==='bool'){if(x.length!==2)return (()=>{throw new Error('invalid-doc-bool')})();return Object.freeze([tag,assertBool(x[1])]);}"
+             "if(tag==='i64'){if(x.length!==2)throw new Error('invalid-doc-i64');return Object.freeze([tag,assertI64(x[1])]);}"
+             "if(tag==='f64'){if(x.length!==2)throw new Error('invalid-doc-f64');const n=assertF64(x[1]);if(!Number.isFinite(n))throw new Error('nonfinite-doc-f64');return Object.freeze([tag,n]);}"
+             "if(tag==='string'||tag==='keyword'){if(x.length!==2)throw new Error('invalid-doc-text');"
+             "const s=tag==='string'?assertString(x[1]):assertKeyword(x[1]);state.bytes+=utf8Bytes(s);"
+             "if(state.bytes>" max-document-utf8-bytes ")throw new Error('doc-utf8-limit');return Object.freeze([tag,s]);}"
+             "if(tag==='vector'){if(x.length!==2||!Array.isArray(x[1])||x[1].length>" max-document-container-items
+             ")throw new Error('invalid-doc-vector');return Object.freeze([tag,Object.freeze(x[1].map(y=>walk(y,d+1)))]);}"
+             "if(tag==='map'){if(x.length!==2||!Array.isArray(x[1])||x[1].length>" max-document-container-items
+             ")throw new Error('invalid-doc-map');let previous=null;const entries=x[1].map(e=>{"
+             "if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-doc-entry');"
+             "if(state.seen.has(e))throw new Error('doc-shared-or-cyclic');state.seen.add(e);"
+             "const key=assertKeyword(e[0]);state.bytes+=utf8Bytes(key);if(state.bytes>" max-document-utf8-bytes
+             ")throw new Error('doc-utf8-limit');if(previous!==null&&previous>=key)throw new Error('noncanonical-doc-map');"
+             "previous=key;return Object.freeze([key,walk(e[1],d+1)]);});return Object.freeze([tag,Object.freeze(entries)]);}"
+             "throw new Error('unknown-doc-tag');};return walk(v,0);};"
+             "const makeDocScalar=(tag,value)=>assertDoc([tag,value]);"
+             "const makeDocVector=items=>assertDoc(['vector',items]);"
+             "const makeDocMap=entries=>{if(!Array.isArray(entries)||entries.length>" max-document-container-items
+             ")throw new Error('invalid-doc-map');const sorted=entries.map(e=>{if(!Array.isArray(e)||e.length!==2)"
+             "throw new Error('invalid-doc-entry');return [assertKeyword(e[0]),e[1]];}).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);"
+             "for(let i=1;i<sorted.length;i++)if(sorted[i-1][0]===sorted[i][0])throw new Error('duplicate-doc-key');"
+             "return assertDoc(['map',sorted]);};"
+             "const docMapEntries=v=>{v=assertDoc(v);if(v[0]!=='map')throw new Error('doc-map-required');return v[1];};"
+             "const docCount=v=>{v=assertDoc(v);if(v[0]!=='map'&&v[0]!=='vector')throw new Error('doc-container-required');return BigInt(v[1].length);};"
+             "const docPosition=(v,key)=>{const entries=docMapEntries(v);key=assertKeyword(key);return [entries,key,entries.findIndex(e=>e[0]===key)];};"
+             "const docContains=(v,key)=>docPosition(v,key)[2]>=0;"
+             "const docGet=(v,key)=>{const [entries,k,i]=docPosition(v,key);return makeGenericOption(docType,i>=0,i>=0?entries[i][1]:undefined);};"
+             "const docAssoc=(v,key,item)=>{const [entries,k,i]=docPosition(v,key);item=assertDoc(item);"
+             "if(i<0&&entries.length>=" max-document-container-items ")throw new Error('doc-map-too-large');"
+             "const out=entries.map(e=>[e[0],e[1]]);if(i<0)out.push([k,item]);else out[i]=[k,item];return makeDocMap(out);};"
+             "const docDissoc=(v,key)=>{const [entries,k,i]=docPosition(v,key);return i<0?assertDoc(v):makeDocMap(entries.filter((e,n)=>n!==i));};"
+             "const docMerge=(a,b)=>{let out=docMapEntries(a).map(e=>[e[0],e[1]]);for(const e of docMapEntries(b)){const i=out.findIndex(x=>x[0]===e[0]);if(i<0)out.push([e[0],e[1]]);else out[i]=[e[0],e[1]];}return makeDocMap(out);};"
+             "const docScalarOption=(tag,v)=>{v=assertDoc(v);const t=Object.freeze(['option',tag]);return makeGenericOption(t,v[0]===tag,v[0]===tag?v[1]:undefined);};"
              "const xmlName=/^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/u;"
              "const xmlWs=c=>c===' '||c==='\\t'||c==='\\n'||c==='\\r';"
              "const parseBoundedXml=input=>{const s=assertString(input);let i=0,nodes=0;const out=[];"
