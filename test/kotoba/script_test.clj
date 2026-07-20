@@ -1095,6 +1095,9 @@
           :body '(document-vector-conj
                    (document-vector-assoc (items) 1 (document-i64 7))
                    (document-i64 9))}
+         {:name 'kind :params [] :param-types [] :result :keyword :effects #{}
+          :body '(option-value-of [:option :keyword]
+                   (document-keyword-value (document-keyword :fixed)) :missing)}
          {:name 'tail :params [] :param-types [] :result :document :effects #{}
           :body '(document-vector-drop (changed) 1)}
          {:name 'bad-assoc :params [] :param-types [] :result :document :effects #{}
@@ -1106,7 +1109,7 @@
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),v=x.changed(),t=x.tail();"
-                     "if(x['first-item']()!==1n||v[1].length!==3||v[1][1][1]!==7n||t[1].length!==2)process.exit(2);"
+                     "if(x['first-item']()!==1n||x.kind()!==':fixed'||v[1].length!==3||v[1][1][1]!==7n||t[1].length!==2)process.exit(2);"
                      "if(!Object.isFrozen(v)||!Object.isFrozen(v[1])||!Object.isFrozen(t))process.exit(3);"
                      "try{x['bad-assoc']();process.exit(4)}catch(e){if(e.message!=='doc-vector-index-out-of-range')process.exit(5)}"
                      "})"))]
