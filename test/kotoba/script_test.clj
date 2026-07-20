@@ -1093,7 +1093,12 @@
          {:name 'kind :params ['value] :param-types [:document]
           :result :keyword :effects #{} :body '(document-kind value)}
          {:name 'same :params ['left 'right] :param-types [:document :document]
-          :result :bool :effects #{} :body '(document-equal? left right)}]
+          :result :bool :effects #{} :body '(document-equal? left right)}
+         {:name 'repeated-nulls :params [] :param-types [] :result :document :effects #{}
+          :body '(document-map :a (document-null) :b (document-null))}
+         {:name 'repeated-value :params [] :param-types [] :result :document :effects #{}
+          :body '(let [item (document-map :name (document-string "same"))]
+                   (document-vector item item))}]
         source (script/emit {:format :kotoba.kir/v4 :entry nil
                              :exports (mapv :name functions) :effects #{} :functions functions})
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
@@ -1104,12 +1109,14 @@
               "').then(m=>{const x=m.instantiateKotoba({}),d=x.doc();"
               "if(x['type-name']()!=='Annotation'||x['updated-count']()!==3n||x.kind(d)!==':map')process.exit(2);"
               "const same=['map',[[':items',['vector',[['i64',1n],['string','x']]]]]],different=['map',[[':items',['vector',[['i64',2n],['string','x']]]]]];if(x.same(same,same)!==true||x.same(same,different)!==false||x.same(['f64',-0],['f64',0])!==true)process.exit(7);"
+              "const nulls=x['repeated-nulls'](),repeated=x['repeated-value']();if(nulls[1].length!==2||nulls[1][0][1][0]!=='null'||repeated[1].length!==2||repeated[1][0][1][0][1][1]!=='same'||repeated[1][0]===repeated[1][1])process.exit(8);"
               "for(const [v,k] of [[['null'],':null'],[['bool',true],':bool'],[['i64',1n],':i64'],[['f64',1],':f64'],[['string','x'],':string'],[['keyword',':x'],':keyword'],[['vector',[]],':vector']])if(x.kind(v)!==k)process.exit(6);"
               "if(!Object.isFrozen(d)||!Object.isFrozen(d[1])||!Object.isFrozen(d[1][0]))process.exit(3);"
               "for(const bad of [{type:'Annotation'},['map',[[':b',['null']],[':a',['null']]]],['f64',Infinity]]){let rejected=false;"
               "try{x['external-count'](bad)}catch(e){rejected=true}if(!rejected)process.exit(4);}"
               "const cycle=['vector',[]];cycle[1].push(cycle);let rejected=false;"
-              "try{x['external-count'](cycle)}catch(e){rejected=true}if(!rejected)process.exit(5);})"))]
+              "try{x['external-count'](cycle)}catch(e){rejected=true}if(!rejected)process.exit(5);"
+              "const child=['string','shared'],shared=['vector',[child,child]];rejected=false;try{x['external-count'](shared)}catch(e){rejected=true}if(!rejected)process.exit(9);})"))]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const assertDoc="))
     (is (str/includes? source "const docMerge="))
