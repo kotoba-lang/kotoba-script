@@ -22,6 +22,10 @@
 (def ^:private max-set-items 32)
 (def ^:private max-typed-map-entries 31)
 (def ^:private max-record-fields 32)
+(def ^:private max-xml-nodes 2048)
+(def ^:private max-xml-depth 32)
+(def ^:private max-xml-attributes 32)
+(def ^:private max-xml-path-segments 32)
 
 (declare fail!)
 
@@ -435,6 +439,16 @@
       (= op 'string-concat)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
+      (= op 'xml-path-count)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'xml-path-attr)
+      (do (require-arity! op args 4)
+          (require-type! (nth types 0) :string (nth args 0))
+          (require-type! (nth types 1) :string (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2))
+          (require-type! (nth types 3) :string (nth args 3))
+          [:option :string])
 
       (= op 'f64-to-bits)
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
@@ -1106,6 +1120,9 @@
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
+      (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
+                                 (a (nth args 2)) "," (a (nth args 3)) ")")
       (= op 'f64-to-bits) (str "f64ToBits(" (a (first args)) ")")
       (= op 'f64-from-bits) (str "f64FromBits(" (a (first args)) ")")
       (= op 'i64-to-f64-checked) (str "i64ToF64Checked(" (a (first args)) ")")
@@ -1357,6 +1374,10 @@
                (str ",recordLimits:Object.freeze({fields:" max-record-fields "})"))
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",typedMapLimits:Object.freeze({entries:" max-typed-map-entries "})"))
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",xmlSubsetLimits:Object.freeze({nodes:" max-xml-nodes
+                    ",depth:" max-xml-depth ",attributesPerNode:" max-xml-attributes
+                    ",pathSegments:" max-xml-path-segments "})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -1673,6 +1694,44 @@
              "else if(u>=56320&&u<=57343)throw new Error('invalid-utf16');else n+=3;}return n;};"
              "const assertString=v=>{if(typeof v!=='string')throw new Error('invalid-string');"
              "if(utf8Bytes(v)>" max-string-value-bytes ")throw new Error('string-too-large');return v;};"
+             "const xmlName=/^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/u;"
+             "const xmlWs=c=>c===' '||c==='\\t'||c==='\\n'||c==='\\r';"
+             "const parseBoundedXml=input=>{const s=assertString(input);let i=0,nodes=0;const out=[];"
+             "const skip=()=>{while(i<s.length&&xmlWs(s[i]))i++;};"
+             "const comment=()=>{if(!s.startsWith('<!--',i))return false;const e=s.indexOf('-->',i+4);"
+             "if(e<0||s.slice(i+4,e).includes('--'))throw new Error('invalid-xml-comment');i=e+3;return true;};"
+             "const comments=()=>{let found=false;for(;;){skip();if(!comment())return found;found=true;}};"
+             "const name=()=>{const b=i;while(i<s.length&&/[A-Za-z0-9_.:-]/u.test(s[i]))i++;"
+             "const v=s.slice(b,i);if(!xmlName.test(v))throw new Error('invalid-xml-name');return v;};"
+             "const element=(depth,parent)=>{if(depth>" max-xml-depth ")throw new Error('xml-depth-limit');"
+             "if(++nodes>" max-xml-nodes ")throw new Error('xml-node-limit');"
+             "if(s[i]!=='<'||s[i+1]==='/'||s[i+1]==='!'||s[i+1]==='?')throw new Error('invalid-xml-element');i++;"
+             "const tag=name(),path=parent?parent+'/'+tag:tag,attrs=Object.create(null);let ac=0,emptyElement=false;"
+             "for(;;){skip();if(s.startsWith('/>',i)){i+=2;emptyElement=true;break;}if(s[i]==='>'){i++;break;}"
+             "const k=name();if(Object.prototype.hasOwnProperty.call(attrs,k))throw new Error('duplicate-xml-attribute');"
+             "if(++ac>" max-xml-attributes ")throw new Error('xml-attribute-limit');skip();"
+             "if(s[i++]!=='=')throw new Error('invalid-xml-attribute');skip();const q=s[i++];"
+             "if(q.charCodeAt(0)!==34&&q.charCodeAt(0)!==39)throw new Error('invalid-xml-attribute');const b=i;"
+             "while(i<s.length&&s[i]!==q){if(s[i]==='<'||s[i]==='&')throw new Error('xml-entity-or-markup-rejected');i++;}"
+             "if(i>=s.length)throw new Error('unterminated-xml-attribute');attrs[k]=assertString(s.slice(b,i++));}"
+             "out.push(Object.freeze({path,attrs:Object.freeze(attrs)}));if(emptyElement)return;"
+             "for(;;){comments();skip();if(s.startsWith('</',i)){i+=2;const close=name();skip();"
+             "if(close!==tag||s[i++]!=='>')throw new Error('xml-close-mismatch');return;}"
+             "if(s[i]==='<'){element(depth+1,path);continue;}throw new Error('xml-text-rejected');}};"
+             "comments();if(s.startsWith('<?xml',i)){const e=s.indexOf('?>',i+5);if(e<0)throw new Error('invalid-xml-declaration');"
+             "const d=s.slice(i,e+2);if(!/^<\\?xml\\s+version=(?:\"1\\.[01]\"|'1\\.[01]')(?:\\s+encoding=(?:\"UTF-8\"|'UTF-8'))?\\s*\\?>$/u.test(d))"
+             "throw new Error('invalid-xml-declaration');i=e+2;}comments();element(1,'');comments();skip();"
+             "if(i!==s.length)throw new Error('xml-trailing-content');return Object.freeze(out);};"
+             "const xmlPath=path=>{path=assertString(path);const p=path.split('/');"
+             "if(p.length<1||p.length>" max-xml-path-segments "||p.some(x=>!xmlName.test(x)))throw new Error('invalid-xml-path');return path;};"
+             "const xmlPathCount=(xml,path)=>{const p=xmlPath(path);return BigInt(parseBoundedXml(xml).filter(n=>n.path===p).length);};"
+             "const xmlStringOption=Object.freeze(['option','string']);"
+             "const xmlPathAttr=(xml,path,index,attr)=>{const p=xmlPath(path);attr=assertString(attr);"
+             "if(!xmlName.test(attr))throw new Error('invalid-xml-name');index=assertI64(index);"
+             "if(index<0n)throw new Error('xml-index-out-of-range');const xs=parseBoundedXml(xml).filter(n=>n.path===p);"
+             "if(index>=BigInt(xs.length))return makeGenericOption(xmlStringOption,false,null);"
+             "const a=xs[Number(index)].attrs;return Object.prototype.hasOwnProperty.call(a,attr)"
+             "?makeGenericOption(xmlStringOption,true,a[attr]):makeGenericOption(xmlStringOption,false,null);};"
              "const assertKeyword=v=>{if(typeof v!=='string'||v.length<2||v[0]!==':'||"
              "v.includes('::')||/\\s|[\\[\\]{}()\"',;@`~^\\\\]/u.test(v))"
              "throw new Error('invalid-keyword');if(utf8Bytes(v)>" max-keyword-bytes
