@@ -539,6 +539,9 @@
       (= op 'string-concat)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
+      (= op 'keyword-from-string)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :string (first args)) :keyword)
       (= op 'xml-path-count)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
@@ -1257,6 +1260,7 @@
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
       (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
                                  (a (nth args 2)) "," (a (nth args 3)) ")")
@@ -1971,9 +1975,11 @@
              "return items.every(item=>item!==null)?makeGenericOption(decimalF64x3Option,true,makeHeterogeneousVector(decimalF64x3Vector,items))"
              ":makeGenericOption(decimalF64x3Option,false,null);};"
              "const assertKeyword=v=>{if(typeof v!=='string'||v.length<2||v[0]!==':'||"
-             "v.includes('::')||/\\s|[\\[\\]{}()\"',;@`~^\\\\]/u.test(v))"
+             "v.includes('::')||/\\s|[\\[\\]{}()\"',;`~^\\\\]/u.test(v))"
              "throw new Error('invalid-keyword');if(utf8Bytes(v)>" max-keyword-bytes
              ")throw new Error('keyword-too-large');return v;};"
+             "const keywordFromString=v=>{v=assertString(v);if(v.length===0||v[0]===':'||/\\s/u.test(v))"
+             "throw new Error('invalid-keyword-source');return assertKeyword(':'+v);};"
              "const makeMap=entries=>{if(!Array.isArray(entries)||entries.length>" max-map-entries
              ")throw new Error('map-too-large');const seen=new Set();const out=[];"
              "for(const entry of entries){if(!Array.isArray(entry)||entry.length!==2)throw new Error('invalid-map');"

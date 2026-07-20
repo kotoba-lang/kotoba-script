@@ -1082,6 +1082,20 @@
     (is (str/includes? source "const assertDoc="))
     (is (str/includes? source "const docMerge="))))
 
+(deftest bounded-keywords-can-be-created-from-safe-runtime-text
+  (let [source (script/emit
+                {:format :kotoba.kir/v4 :entry nil :exports ['context-key]
+                 :effects #{}
+                 :functions [{:name 'context-key :params [] :param-types []
+                              :result :keyword :effects #{}
+                              :body '(keyword-from-string "@context")}]})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh "node" "--input-type=module" "-e"
+                         (str "import('data:text/javascript;base64," encoded
+                              "').then(m=>{if(m.instantiateKotoba({})['context-key']()!==':@context')process.exit(2)})"))]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const keywordFromString="))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo
