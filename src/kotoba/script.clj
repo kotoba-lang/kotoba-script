@@ -26,6 +26,7 @@
 (def ^:private max-xml-depth 32)
 (def ^:private max-xml-attributes 32)
 (def ^:private max-xml-path-segments 32)
+(def ^:private max-decimal-f64-bytes 64)
 
 (declare fail!)
 
@@ -449,6 +450,10 @@
           (require-type! (nth types 2) :i64 (nth args 2))
           (require-type! (nth types 3) :string (nth args 3))
           [:option :string])
+      (= op 'decimal-f64-parse)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :string (first args))
+          [:option :f64])
 
       (= op 'f64-to-bits)
       (do (require-arity! op args 1) (require-type! (first types) :f64 (first args)) :i64)
@@ -1123,6 +1128,7 @@
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
       (= op 'xml-path-attr) (str "xmlPathAttr(" (a (nth args 0)) "," (a (nth args 1)) ","
                                  (a (nth args 2)) "," (a (nth args 3)) ")")
+      (= op 'decimal-f64-parse) (str "decimalF64Parse(" (a (first args)) ")")
       (= op 'f64-to-bits) (str "f64ToBits(" (a (first args)) ")")
       (= op 'f64-from-bits) (str "f64FromBits(" (a (first args)) ")")
       (= op 'i64-to-f64-checked) (str "i64ToF64Checked(" (a (first args)) ")")
@@ -1378,6 +1384,9 @@
                (str ",xmlSubsetLimits:Object.freeze({nodes:" max-xml-nodes
                     ",depth:" max-xml-depth ",attributesPerNode:" max-xml-attributes
                     ",pathSegments:" max-xml-path-segments "})"))
+             (when (= :kotoba.kir/v4 (:format kir))
+               (str ",decimalF64Limits:Object.freeze({bytes:" max-decimal-f64-bytes
+                    ",finiteOnly:true,rounding:'nearest-ties-even'})"))
              ",sourceDigest:" (js-string source-digest)
              ",kirDigest:" (js-string kir-digest)
              ",compilerVersion:" (js-string compiler-version)
@@ -1732,6 +1741,12 @@
              "if(index>=BigInt(xs.length))return makeGenericOption(xmlStringOption,false,null);"
              "const a=xs[Number(index)].attrs;return Object.prototype.hasOwnProperty.call(a,attr)"
              "?makeGenericOption(xmlStringOption,true,a[attr]):makeGenericOption(xmlStringOption,false,null);};"
+             "const decimalF64Pattern=/^[+-]?(?:(?:[0-9]+(?:\\.[0-9]*)?)|(?:\\.[0-9]+))(?:[eE][+-]?[0-9]{1,3})?$/u;"
+             "const decimalF64Option=Object.freeze(['option','f64']);"
+             "const decimalF64Parse=value=>{value=assertString(value);if(utf8Bytes(value)>" max-decimal-f64-bytes
+             "||!decimalF64Pattern.test(value))return makeGenericOption(decimalF64Option,false,null);"
+             "const parsed=Number(value);return Number.isFinite(parsed)?makeGenericOption(decimalF64Option,true,parsed)"
+             ":makeGenericOption(decimalF64Option,false,null);};"
              "const assertKeyword=v=>{if(typeof v!=='string'||v.length<2||v[0]!==':'||"
              "v.includes('::')||/\\s|[\\[\\]{}()\"',;@`~^\\\\]/u.test(v))"
              "throw new Error('invalid-keyword');if(utf8Bytes(v)>" max-keyword-bytes

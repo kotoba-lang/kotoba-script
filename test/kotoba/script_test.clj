@@ -1142,6 +1142,31 @@
     (is (str/includes? source "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
     (is (not (re-find #"DOMParser|document|fetch|XMLHttpRequest" source)))))
 
+(deftest bounded-decimal-f64-parser-is-finite-typed-and-preserves-negative-zero
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['parse]
+             :effects #{}
+             :functions [{:name 'parse :params ['value] :param-types [:string]
+                          :result [:option :f64] :effects #{}
+                          :body '(decimal-f64-parse value)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        valid ["0" "-0" "+1.5" "-2.4" ".5" "1." "6.022e23"
+               "1e-324" "5e-324" "1.7976931348623157e308"]
+        invalid ["" " " "NaN" "Infinity" "-Infinity" "0x10" "1_000"
+                 "1e0000" "1e309" (apply str (repeat 65 "1"))]
+        valid-js (str "[" (str/join "," (map pr-str valid)) "]")
+        invalid-js (str "[" (str/join "," (map pr-str invalid)) "]")
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "for(const s of " valid-js "){const v=x.parse(s);if(!v[1]||!Number.isFinite(v[2]))process.exit(2)}"
+                "if(!Object.is(x.parse('-0')[2],-0)||x.parse('1e-324')[2]!==0||x.parse('5e-324')[2]!==Number.MIN_VALUE)process.exit(3);"
+                "for(const s of " invalid-js "){const v=x.parse(s);if(v[1])process.exit(4)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
+    (is (str/includes? source
+                       "decimalF64Limits:Object.freeze({bytes:64,finiteOnly:true,rounding:'nearest-ties-even'})"))
+    (is (not (re-find #"parseFloat|eval|Function" source)))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
     (System/exit (if (pos? (+ fail error)) 1 0))))
