@@ -935,6 +935,51 @@
                                        :result :vector-i64 :effects #{}
                                        :body (apply list 'vector-new (range 16385))}]}))))
 
+(deftest bounded-vector-f64-preserves-ieee-values-and-persistence
+  (let [kir {:format :kotoba.kir/v4 :entry nil
+             :exports ['make 'count-items 'lookup 'require-item 'drop-items 'update 'append]
+             :effects #{}
+             :functions
+             [{:name 'make :params [] :param-types [] :result :vector-f64 :effects #{}
+               :body '(vector-f64-new -0.0 ##NaN 1.5)}
+              {:name 'count-items :params ['value] :param-types [:vector-f64]
+               :result :i64 :effects #{} :body '(vector-f64-count value)}
+              {:name 'lookup :params ['value 'index 'fallback]
+               :param-types [:vector-f64 :i64 :f64] :result :f64 :effects #{}
+               :body '(vector-f64-get value index fallback)}
+              {:name 'require-item :params ['value 'index] :param-types [:vector-f64 :i64]
+               :result :f64 :effects #{} :body '(vector-f64-at value index)}
+              {:name 'drop-items :params ['value 'count] :param-types [:vector-f64 :i64]
+               :result :vector-f64 :effects #{} :body '(vector-f64-drop value count)}
+              {:name 'update :params ['value 'index 'item]
+               :param-types [:vector-f64 :i64 :f64] :result :vector-f64 :effects #{}
+               :body '(vector-f64-assoc value index item)}
+              {:name 'append :params ['value 'item] :param-types [:vector-f64 :f64]
+               :result :vector-f64 :effects #{} :body '(vector-f64-conj value item)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),v=x.make();"
+                "if(x['count-items'](v)!==3n||!Object.is(v[0],-0)||!Number.isNaN(v[1])||v[2]!==1.5)process.exit(2);"
+                "const changed=x.update(v,2n,-0),appended=x.append(changed,Infinity),dropped=x['drop-items'](appended,1n);"
+                "if(v[2]!==1.5||!Object.is(changed[2],-0)||appended[3]!==Infinity||!Object.isFrozen(dropped))process.exit(3);"
+                "if(!Number.isNaN(x.lookup(v,1n,7))||x.lookup(v,99n,-2.5)!==-2.5)process.exit(4);"
+                "try{x['require-item'](v,-1n);process.exit(5)}catch(e){if(e.message!=='vector-f64-index-out-of-range')process.exit(6)}"
+                "for(const bad of [null,[1n],[undefined]]){try{x['count-items'](bad);process.exit(7)}catch(e){}}"
+                "try{x['count-items'](Array.from({length:16385},()=>0));process.exit(8)}"
+                "catch(e){if(e.message!=='vector-f64-too-large')process.exit(9)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const makeVectorF64="))
+    (is (str/includes? source "vectorF64Get(")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"item limit"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry nil :exports ['too-large] :effects #{}
+                          :functions [{:name 'too-large :params [] :param-types []
+                                       :result :vector-f64 :effects #{}
+                                       :body (apply list 'vector-f64-new
+                                                    (repeat 16385 0.0))}]}))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo

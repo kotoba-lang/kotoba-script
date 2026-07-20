@@ -8,7 +8,8 @@
 (def artifact-schema "kotoba-js-artifact/v1")
 (def floating-point-policy "ieee-754-f32-f64-v7")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64 :vector-i64})
+(def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
+                             :vector-i64 :vector-f64})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
@@ -200,6 +201,7 @@
            :option-i64 "assertOptionI64("
            :result-i64 "assertResultI64("
            :vector-i64 "assertVectorI64("
+           :vector-f64 "assertVectorF64("
            "assertI64(") expression ")")))
 
 (defn- utf8-byte-count
@@ -358,6 +360,44 @@
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :vector-i64 (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
+
+      (= op 'vector-f64-new)
+      (do (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
+          (when (> (count args) max-vector-items)
+            (fail! "KIR f64 vector literal exceeds item limit"
+                   {:items (count args) :limit max-vector-items}))
+          :vector-f64)
+
+      (= op 'vector-f64-count)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :vector-f64 (first args)) :i64)
+
+      (= op 'vector-f64-get)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1))
+          (require-type! (nth types 2) :f64 (nth args 2)) :f64)
+
+      (= op 'vector-f64-at)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :f64)
+
+      (= op 'vector-f64-drop)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :vector-f64)
+
+      (= op 'vector-f64-assoc)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1))
+          (require-type! (nth types 2) :f64 (nth args 2)) :vector-f64)
+
+      (= op 'vector-f64-conj)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-type! (nth types 1) :f64 (nth args 1)) :vector-f64)
 
       (contains? '#{< > <= >=} op)
       (do (require-arity! op args 2)
@@ -1025,6 +1065,15 @@
       (= op 'vector-assoc) (str "vectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) ","
                                 (a (nth args 2)) ")")
       (= op 'vector-conj) (str "vectorConj(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'vector-f64-new) (str "makeVectorF64([" (str/join "," (map a args)) "])")
+      (= op 'vector-f64-count) (str "BigInt(assertVectorF64(" (a (first args)) ").length)")
+      (= op 'vector-f64-get) (str "vectorF64Get(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
+                                  (a (nth args 2)) ")")
+      (= op 'vector-f64-at) (str "vectorF64At(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'vector-f64-drop) (str "vectorF64Drop(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'vector-f64-assoc) (str "vectorF64Assoc(" (a (nth args 0)) "," (a (nth args 1)) ","
+                                    (a (nth args 2)) ")")
+      (= op 'vector-f64-conj) (str "vectorF64Conj(" (a (nth args 0)) "," (a (nth args 1)) ")")
       (= op 'pair) (str "Object.freeze([" (a (first args)) "," (a (second args)) "])")
       (= op 'pair-first) (str (a (first args)) "[0]")
       (= op 'pair-second) (str (a (first args)) "[1]")
@@ -1423,6 +1472,7 @@
              "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
              "if(t==='vector-i64')return assertVectorI64(v);"
+             "if(t==='vector-f64')return assertVectorF64(v);"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='vector'&&Array.isArray(t[1])){"
              "if(t[1].length>" max-heterogeneous-vector-items
              "||!Array.isArray(v)||v.length!==t[1].length+1||!sameType(v[0],t))"
@@ -1565,6 +1615,21 @@
              "const out=v.slice();out[Number(i)]=assertI64(item);return makeVector(out);};"
              "const vectorConj=(v,item)=>{v=assertVectorI64(v);if(v.length>=" max-vector-items
              ")throw new Error('vector-too-large');return makeVector([...v,assertI64(item)]);};"
+             "const makeVectorF64=items=>{if(!Array.isArray(items))throw new Error('invalid-vector-f64');"
+             "if(items.length>" max-vector-items ")throw new Error('vector-f64-too-large');"
+             "return Object.freeze(items.map(assertF64));};"
+             "const assertVectorF64=v=>makeVectorF64(v);"
+             "const vectorF64Get=(v,i,fallback)=>{v=assertVectorF64(v);i=assertI64(i);"
+             "return i>=0n&&i<BigInt(v.length)?v[Number(i)]:assertF64(fallback());};"
+             "const vectorF64At=(v,i)=>{v=assertVectorF64(v);i=assertI64(i);"
+             "if(i<0n||i>=BigInt(v.length))throw new Error('vector-f64-index-out-of-range');return v[Number(i)];};"
+             "const vectorF64Drop=(v,n)=>{v=assertVectorF64(v);n=assertI64(n);"
+             "if(n<0n||n>BigInt(v.length))throw new Error('vector-f64-drop-out-of-range');return makeVectorF64(v.slice(Number(n)));};"
+             "const vectorF64Assoc=(v,i,item)=>{v=assertVectorF64(v);i=assertI64(i);"
+             "if(i<0n||i>=BigInt(v.length))throw new Error('vector-f64-index-out-of-range');"
+             "const out=v.slice();out[Number(i)]=assertF64(item);return makeVectorF64(out);};"
+             "const vectorF64Conj=(v,item)=>{v=assertVectorF64(v);if(v.length>=" max-vector-items
+             ")throw new Error('vector-f64-too-large');return makeVectorF64([...v,assertF64(item)]);};"
              "const utf8Bytes=s=>{let n=0;for(let i=0;i<s.length;i++){const u=s.charCodeAt(i);"
              "if(u<=127)n++;else if(u<=2047)n+=2;else if(u>=55296&&u<=56319){"
              "if(i+1>=s.length)throw new Error('invalid-utf16');const l=s.charCodeAt(++i);"
