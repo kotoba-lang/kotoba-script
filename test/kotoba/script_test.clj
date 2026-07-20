@@ -1018,6 +1018,32 @@
                                        :body (apply list 'vector-f64-new
                                                     (repeat 16385 0.0))}]}))))
 
+(deftest compact-string-index-and-disjoint-set-are-bounded-and-persistent
+  (let [functions
+        [{:name 'index :params [] :param-types [] :result :string-index :effects #{}
+          :body '(string-index-assoc (string-index-assoc (string-index-new) "b" 2) "a" 1)}
+         {:name 'lookup :params [] :param-types [] :result :i64 :effects #{}
+          :body '(option-value-of [:option :i64] (string-index-get (index) "b") 99)}
+         {:name 'joined :params [] :param-types [] :result :disjoint-set-i64 :effects #{}
+          :body '(option-value-of [:option :disjoint-set-i64]
+                   (disjoint-set-i64-union (disjoint-set-i64-new 3) 0 2)
+                   (disjoint-set-i64-new 0))}
+         {:name 'cycle :params [] :param-types [] :result :bool :effects #{}
+          :body '(option-some?-of [:option :disjoint-set-i64]
+                   (disjoint-set-i64-union (joined) 2 0))}]
+        source (script/emit {:format :kotoba.kir/v4 :entry nil
+                             :exports (mapv :name functions) :effects #{} :functions functions})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh "node" "--input-type=module" "-e"
+                         (str "import('data:text/javascript;base64," encoded
+                              "').then(m=>{const x=m.instantiateKotoba({}),i=x.index(),d=x.joined();"
+                              "if(x.lookup()!==2n||i.length!==2||i[0][0]!=='a'||d[0].length!==3||x.cycle()!==false)process.exit(2);"
+                              "if(!Object.isFrozen(i)||!Object.isFrozen(i[0])||!Object.isFrozen(d[0]))process.exit(3);"
+                              "for(const f of [()=>x.index(Array(129).fill(['x',0n])),()=>x.joined(129n)]){try{f();}catch(e){}}})"))]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const assertStringIndex="))
+    (is (str/includes? source "const disjointSetI64Union="))))
+
 (deftest rejects-unchecked-or-unknown-ir
   (is (thrown? clojure.lang.ExceptionInfo (script/emit {:format :unknown})))
   (is (thrown? clojure.lang.ExceptionInfo

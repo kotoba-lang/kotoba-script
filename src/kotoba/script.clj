@@ -9,7 +9,7 @@
 (def floating-point-policy "ieee-754-f32-f64-v7")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
-                             :vector-i64 :vector-f64})
+                             :vector-i64 :vector-f64 :string-index :disjoint-set-i64})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
@@ -22,6 +22,8 @@
 (def ^:private max-set-items 32)
 (def ^:private max-typed-map-entries 31)
 (def ^:private max-record-fields 32)
+(def ^:private max-compact-graph-items 128)
+(def ^:private max-string-index-key-bytes 65536)
 (def ^:private max-xml-nodes 2048)
 (def ^:private max-xml-depth 32)
 (def ^:private max-xml-attributes 32)
@@ -208,6 +210,8 @@
            :result-i64 "assertResultI64("
            :vector-i64 "assertVectorI64("
            :vector-f64 "assertVectorF64("
+           :string-index "assertStringIndex("
+           :disjoint-set-i64 "assertDisjointSetI64("
            "assertI64(") expression ")")))
 
 (defn- utf8-byte-count
@@ -420,6 +424,32 @@
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :vector-f64 (nth args 0))
           (require-type! (nth types 1) :f64 (nth args 1)) :vector-f64)
+
+      (= op 'string-index-new) (do (require-arity! op args 0) :string-index)
+      (= op 'string-index-count)
+      (do (require-arity! op args 1) (require-type! (first types) :string-index (first args)) :i64)
+      (= op 'string-index-contains)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :string-index (nth args 0))
+          (require-type! (nth types 1) :string (nth args 1)) :bool)
+      (= op 'string-index-get)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :string-index (nth args 0))
+          (require-type! (nth types 1) :string (nth args 1)) [:option :i64])
+      (= op 'string-index-assoc)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :string-index (nth args 0))
+          (require-type! (nth types 1) :string (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2)) :string-index)
+      (= op 'disjoint-set-i64-new)
+      (do (require-arity! op args 1) (require-type! (first types) :i64 (first args)) :disjoint-set-i64)
+      (= op 'disjoint-set-i64-count)
+      (do (require-arity! op args 1) (require-type! (first types) :disjoint-set-i64 (first args)) :i64)
+      (= op 'disjoint-set-i64-union)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :disjoint-set-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2)) [:option :disjoint-set-i64])
 
       (contains? '#{< > <= >=} op)
       (do (require-arity! op args 2)
@@ -1123,6 +1153,14 @@
       (= op 'vector-f64-assoc) (str "vectorF64Assoc(" (a (nth args 0)) "," (a (nth args 1)) ","
                                     (a (nth args 2)) ")")
       (= op 'vector-f64-conj) (str "vectorF64Conj(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'string-index-new) "makeStringIndex([])"
+      (= op 'string-index-count) (str "BigInt(assertStringIndex(" (a (first args)) ").length)")
+      (= op 'string-index-contains) (str "stringIndexContains(" (a (first args)) "," (a (second args)) ")")
+      (= op 'string-index-get) (str "stringIndexGet(" (a (first args)) "," (a (second args)) ")")
+      (= op 'string-index-assoc) (str "stringIndexAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
+      (= op 'disjoint-set-i64-new) (str "makeDisjointSetI64(" (a (first args)) ")")
+      (= op 'disjoint-set-i64-count) (str "BigInt(assertDisjointSetI64(" (a (first args)) ")[0].length)")
+      (= op 'disjoint-set-i64-union) (str "disjointSetI64Union(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
       (= op 'pair) (str "Object.freeze([" (a (first args)) "," (a (second args)) "])")
       (= op 'pair-first) (str (a (first args)) "[0]")
       (= op 'pair-second) (str (a (first args)) "[1]")
@@ -1546,6 +1584,8 @@
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
              "if(t==='vector-i64')return assertVectorI64(v);"
              "if(t==='vector-f64')return assertVectorF64(v);"
+             "if(t==='string-index')return assertStringIndex(v);"
+             "if(t==='disjoint-set-i64')return assertDisjointSetI64(v);"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='vector'&&Array.isArray(t[1])){"
              "if(t[1].length>" max-heterogeneous-vector-items
              "||!Array.isArray(v)||v.length!==t[1].length+1||!sameType(v[0],t))"
@@ -1710,6 +1750,40 @@
              "else if(u>=56320&&u<=57343)throw new Error('invalid-utf16');else n+=3;}return n;};"
              "const assertString=v=>{if(typeof v!=='string')throw new Error('invalid-string');"
              "if(utf8Bytes(v)>" max-string-value-bytes ")throw new Error('string-too-large');return v;};"
+             "const assertStringIndex=v=>{if(!Array.isArray(v)||v.length>" max-compact-graph-items
+             ")throw new Error('invalid-string-index');let bytes=0,previous=null;const out=v.map(e=>{"
+             "if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-string-index-entry');"
+             "const key=assertString(e[0]),item=assertI64(e[1]);bytes+=utf8Bytes(key);"
+             "if(previous!==null&&previous>=key)throw new Error('noncanonical-string-index');previous=key;"
+             "return Object.freeze([key,item]);});if(bytes>" max-string-index-key-bytes
+             ")throw new Error('string-index-key-budget');return Object.freeze(out);};"
+             "const makeStringIndex=entries=>assertStringIndex(entries);"
+             "const stringIndexPosition=(v,key)=>{v=assertStringIndex(v);key=assertString(key);"
+             "return [v,key,v.findIndex(e=>e[0]===key)];};"
+             "const stringIndexContains=(v,key)=>stringIndexPosition(v,key)[2]>=0;"
+             "const stringIndexGet=(v,key)=>{const [index,k,i]=stringIndexPosition(v,key);"
+             "return makeGenericOption(Object.freeze(['option','i64']),i>=0,i>=0?index[i][1]:undefined);};"
+             "const stringIndexAssoc=(v,key,item)=>{const [index,k,i]=stringIndexPosition(v,key);item=assertI64(item);"
+             "if(i<0&&index.length>=" max-compact-graph-items ")throw new Error('string-index-too-large');"
+             "const out=index.slice();if(i<0)out.push(Object.freeze([k,item]));else out[i]=Object.freeze([k,item]);"
+             "out.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);return makeStringIndex(out);};"
+             "const assertDisjointSetI64=v=>{if(!Array.isArray(v)||v.length!==2||!Array.isArray(v[0])||"
+             "!Array.isArray(v[1])||v[0].length!==v[1].length||v[0].length>" max-compact-graph-items
+             ")throw new Error('invalid-disjoint-set-i64');const n=v[0].length;"
+             "const parents=v[0].map(p=>{p=assertI64(p);if(p<0n||p>=BigInt(n))throw new Error('disjoint-parent-range');return p;});"
+             "const ranks=v[1].map(r=>{r=assertI64(r);if(r<0n||r>BigInt(n))throw new Error('disjoint-rank-range');return r;});"
+             "for(let s=0;s<n;s++){let c=s,f=n+1;while(Number(parents[c])!==c){if(--f===0)throw new Error('disjoint-parent-cycle');c=Number(parents[c]);}}"
+             "return Object.freeze([Object.freeze(parents),Object.freeze(ranks)]);};"
+             "const makeDisjointSetI64=size=>{size=assertI64(size);if(size<0n||size>" max-compact-graph-items
+             "n)throw new Error('disjoint-size-range');const n=Number(size);return assertDisjointSetI64(["
+             "Array.from({length:n},(_,i)=>BigInt(i)),Array.from({length:n},()=>0n)]);};"
+             "const disjointSetI64Union=(v,left,right)=>{v=assertDisjointSetI64(v);left=assertI64(left);right=assertI64(right);"
+             "const n=v[0].length;if(left<0n||right<0n||left>=BigInt(n)||right>=BigInt(n))throw new Error('disjoint-index-range');"
+             "const root=x=>{let c=Number(x);for(let f=n+1;f>0;f--){const p=Number(v[0][c]);if(p===c)return c;c=p;}throw new Error('disjoint-parent-cycle');};"
+             "const a=root(left),b=root(right),t=Object.freeze(['option','disjoint-set-i64']);if(a===b)return makeGenericOption(t,false);"
+             "let child=b,parent=a;if(v[1][a]<v[1][b]){child=a;parent=b;}const parents=v[0].slice(),ranks=v[1].slice();"
+             "parents[child]=BigInt(parent);if(v[1][a]===v[1][b])ranks[parent]+=1n;"
+             "return makeGenericOption(t,true,assertDisjointSetI64([parents,ranks]));};"
              "const xmlName=/^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/u;"
              "const xmlWs=c=>c===' '||c==='\\t'||c==='\\n'||c==='\\r';"
              "const parseBoundedXml=input=>{const s=assertString(input);let i=0,nodes=0;const out=[];"
