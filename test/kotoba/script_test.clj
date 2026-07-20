@@ -22,6 +22,38 @@
     (is (str/includes? source "let fuel=512;"))
     (is (not (re-find #"globalThis|window|document|eval" source)))))
 
+(deftest i32-wrapping-shift-and-xorshift-profile-is-explicit
+  (let [functions
+        (mapv (fn [[name params body]]
+                {:name name :params params :param-types (vec (repeat (count params) :i64))
+                 :result :i64 :effects #{} :body body})
+              [['signed ['x] '(i32-wrap x)]
+               ['unsigned ['x] '(u32-wrap x)]
+               ['add ['x 'y] '(i32-wrapping-add x y)]
+               ['mul ['x 'y] '(i32-wrapping-mul x y)]
+               ['xor ['x 'y] '(i32-xor x y)]
+               ['shl ['x 'n] '(i32-shift-left x n)]
+               ['shr ['x 'n] '(i32-shift-right x n)]
+               ['ushr ['x 'n] '(u32-shift-right x n)]
+               ['next ['x] '(xorshift32 x)]])
+        source (script/emit {:format :kotoba.kir/v4 :entry nil
+                             :exports (mapv :name functions) :effects #{}
+                             :functions functions})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.signed(4294967295n)!==-1n||x.unsigned(-1n)!==4294967295n)process.exit(2);"
+                "if(x.add(2147483647n,1n)!==-2147483648n||x.mul(2147483647n,2n)!==-2n)process.exit(3);"
+                "if(x.xor(-1n,2147483647n)!==-2147483648n||x.shl(1n,31n)!==-2147483648n)process.exit(4);"
+                "if(x.shr(-2147483648n,31n)!==-1n||x.ushr(-1n,1n)!==2147483647n)process.exit(5);"
+                "if(x.next(1n)!==270369n||x.next(270369n)!==67634689n||x.next(67634689n)!==2647435461n)process.exit(6);"
+                "for(const n of [-1n,32n]){for(const f of [x.shl,x.shr,x.ushr]){try{f(1n,n);process.exit(7)}"
+                "catch(e){if(e.message!=='i32-shift-count-out-of-range')process.exit(8)}}}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "const xorshift32="))
+    (is (str/includes? source "BigInt.asIntN(32"))))
+
 (deftest floating-point-f64-bit-profile-is-explicit-and-sealed
   (let [typed-kir
         {:format :kotoba.kir/v4 :entry nil

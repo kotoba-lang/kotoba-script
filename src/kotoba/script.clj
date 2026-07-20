@@ -275,6 +275,15 @@
                                     2 :positive))
           (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
 
+      (contains? '#{i32-wrap u32-wrap xorshift32} op)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :i64 (first args)) :i64)
+
+      (contains? '#{i32-wrapping-add i32-wrapping-mul i32-xor
+                    i32-shift-left i32-shift-right u32-shift-right} op)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
+
       (= op '=)
       (do (require-arity! op args 2)
           (when-not (= (first types) (second types))
@@ -933,6 +942,15 @@
       (= op 'quot) (str "quot(" (a (first args)) "," (a (second args)) ")")
       (= op 'bit-xor) (str "i64(" (str/join " ^ " (map a args)) ")")
       (= op 'bit-and) (str "i64(" (str/join " & " (map a args)) ")")
+      (= op 'i32-wrap) (str "i32Wrap(" (a (first args)) ")")
+      (= op 'u32-wrap) (str "u32Wrap(" (a (first args)) ")")
+      (= op 'i32-wrapping-add) (str "i32Add(" (a (first args)) "," (a (second args)) ")")
+      (= op 'i32-wrapping-mul) (str "i32Mul(" (a (first args)) "," (a (second args)) ")")
+      (= op 'i32-xor) (str "i32Xor(" (a (first args)) "," (a (second args)) ")")
+      (= op 'i32-shift-left) (str "i32Shl(" (a (first args)) "," (a (second args)) ")")
+      (= op 'i32-shift-right) (str "i32Shr(" (a (first args)) "," (a (second args)) ")")
+      (= op 'u32-shift-right) (str "u32Shr(" (a (first args)) "," (a (second args)) ")")
+      (= op 'xorshift32) (str "xorshift32(" (a (first args)) ")")
       (= op '=) (str "(valueEqual(" (a (first args)) "," (a (second args)) ")?1n:0n)")
       (contains? '#{< > <= >=} op)
       (let [js-op (case op < "<" > ">" <= "<=" >= ">=")]
@@ -1346,6 +1364,17 @@
              "throw new Error('capability-grant-mismatch');"
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
+             "const i32Wrap=v=>BigInt.asIntN(32,assertI64(v));"
+             "const u32Wrap=v=>BigInt.asUintN(32,assertI64(v));"
+             "const i32Add=(a,b)=>BigInt.asIntN(32,i32Wrap(a)+i32Wrap(b));"
+             "const i32Mul=(a,b)=>BigInt.asIntN(32,i32Wrap(a)*i32Wrap(b));"
+             "const i32Xor=(a,b)=>BigInt.asIntN(32,i32Wrap(a)^i32Wrap(b));"
+             "const shift32=s=>{s=assertI64(s);if(s<0n||s>31n)throw new Error('i32-shift-count-out-of-range');return s;};"
+             "const i32Shl=(v,s)=>BigInt.asIntN(32,i32Wrap(v)<<shift32(s));"
+             "const i32Shr=(v,s)=>i32Wrap(v)>>shift32(s);"
+             "const u32Shr=(v,s)=>u32Wrap(v)>>shift32(s);"
+             "const xorshift32=v=>{let x=u32Wrap(v);x=BigInt.asUintN(32,x^(x<<13n));"
+             "x=BigInt.asUintN(32,x^(x>>17n));return BigInt.asUintN(32,x^(x<<5n));};"
              "const assertF64=v=>{if(typeof v!=='number')throw new Error('invalid-f64');return v;};"
              "const assertF32=v=>{if(typeof v!=='number'||!Object.is(Math.fround(v),v))"
              "throw new Error('invalid-f32');return v;};"
