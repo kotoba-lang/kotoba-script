@@ -1116,7 +1116,8 @@
               "try{x['external-count'](bad)}catch(e){rejected=true}if(!rejected)process.exit(4);}"
               "const cycle=['vector',[]];cycle[1].push(cycle);let rejected=false;"
               "try{x['external-count'](cycle)}catch(e){rejected=true}if(!rejected)process.exit(5);"
-              "const child=['string','shared'],shared=['vector',[child,child]];rejected=false;try{x['external-count'](shared)}catch(e){rejected=true}if(!rejected)process.exit(9);})"))]
+              "const child=['string','shared'],shared=['vector',[child,child]];rejected=false;try{x['external-count'](shared)}catch(e){rejected=true}if(!rejected)process.exit(9);"
+              "const sharedNull=['null'];rejected=false;try{x['external-count'](['vector',[sharedNull,sharedNull]])}catch(e){rejected=true}if(!rejected)process.exit(10);})"))]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const assertDoc="))
     (is (str/includes? source "const docMerge="))
