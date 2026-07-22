@@ -576,6 +576,12 @@
       (= op 'string-replace-all)
       (do (require-arity! op args 3)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
+      (= op 'string-contains?)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'string-fold-case)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :string (first args)) :string)
       (= op 'keyword-from-string)
       (do (require-arity! op args 1)
           (require-type! (first types) :string (first args)) :keyword)
@@ -1326,6 +1332,8 @@
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
       (= op 'string-replace-all) (str "stringReplaceAll(" (a (first args)) ","
                                       (a (second args)) "," (a (nth args 2)) ")")
+      (= op 'string-contains?) (str "stringContains(" (a (first args)) "," (a (second args)) ")")
+      (= op 'string-fold-case) (str "stringFoldCase(" (a (first args)) ")")
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
       (= op 'keyword-name) (str "keywordName(" (a (first args)) ")")
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
@@ -1920,6 +1928,10 @@
              "needle=assertString(needle);replacement=assertString(replacement);"
              "if(needle.length===0)throw new Error('empty-string-replacement-needle');"
              "return assertString(value.split(needle).join(replacement));};"
+             "const stringContains=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
+             "if(needle.length===0)throw new Error('empty-string-search-needle');"
+             "return value.includes(needle)?1n:0n;};"
+             "const stringFoldCase=v=>{v=assertString(v);return assertString(v.toLowerCase());};"
              "const assertStringIndex=v=>{if(!Array.isArray(v)||v.length>" max-compact-graph-items
              ")throw new Error('invalid-string-index');let bytes=0,previous=null;const out=v.map(e=>{"
              "if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-string-index-entry');"
