@@ -71,8 +71,9 @@ KIR v4 preserves `:i64`, `:f32`, `:f64`, `:string`, `:keyword`, `:bool`, `:optio
 first bounded `:map` profile as distinct value types. String
 literals must be well-formed UTF-16, are capped at 4,096 UTF-8 bytes each and
 65,536 bytes per module, and every runtime string crossing a function or host
-boundary is revalidated against the 65,536-byte cap. The backend supports only
-`string-concat`, `string=?`, and `string-byte-length`; it does not hash strings
+boundary is revalidated against the 65,536-byte cap. The backend supports `string-byte-length`, `string=?`, `string-concat`,
+`string-replace-all`, `string-contains?`, `string-fold-case`,
+`keyword-from-string`, and `keyword-name`; it does not hash strings
 into integers or expose JavaScript property access as language semantics.
 Keywords preserve canonical Unicode source text, are capped at 512 UTF-8
 bytes, and are never hashed into integers. Maps contain at most 128 unique
