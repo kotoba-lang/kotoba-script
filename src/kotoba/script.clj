@@ -573,6 +573,12 @@
       (= op 'string-concat)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
+      (= op 'string-substring)
+      (do (require-arity! op args 3)
+          (require-type! (first types) :string (first args))
+          (doseq [[arg type] (map vector (rest args) (rest types))]
+            (require-type! type :i64 arg))
+          :string)
       (= op 'string-replace-all)
       (do (require-arity! op args 3)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
@@ -1330,6 +1336,8 @@
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'string-substring) (str "stringSubstring(" (a (first args)) ","
+                                    (a (second args)) "," (a (nth args 2)) ")")
       (= op 'string-replace-all) (str "stringReplaceAll(" (a (first args)) ","
                                       (a (second args)) "," (a (nth args 2)) ")")
       (= op 'string-contains?) (str "stringContains(" (a (first args)) "," (a (second args)) ")")
@@ -1928,6 +1936,12 @@
              "needle=assertString(needle);replacement=assertString(replacement);"
              "if(needle.length===0)throw new Error('empty-string-replacement-needle');"
              "return assertString(value.split(needle).join(replacement));};"
+             "const stringSubstring=(value,start,end)=>{value=assertString(value);"
+             "start=Number(start);end=Number(end);const bytes=new TextEncoder().encode(value);"
+             "if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>end||end>bytes.length)"
+             "throw new Error('string-substring-bounds');"
+             "try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes.slice(start,end));}"
+             "catch(_){throw new Error('string-substring-code-point-boundary');}};"
              "const stringContains=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
              "if(needle.length===0)throw new Error('empty-string-search-needle');"
              "return value.includes(needle)?1n:0n;};"
