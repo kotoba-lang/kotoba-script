@@ -1417,6 +1417,23 @@
     (is (str/includes? source "vector3Bytes:194"))
     (is (not (re-find #"parseFloat|eval|Function" source)))))
 
+(deftest typed-symbol-construction-is-validated
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['make]
+             :effects #{}
+             :functions [{:name 'make :params ['value] :param-types [:string]
+                          :result :symbol :effects #{}
+                          :body '(symbol value)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (shell/sh
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "if(x.make('alpha/beta')!=='alpha/beta')process.exit(2);"
+                     "try{x.make('bad value');process.exit(3)}catch(e){}})"))]
+    (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
+    (is (str/includes? source "symbolFromString"))))
+
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
     (System/exit (if (pos? (+ fail error)) 1 0))))

@@ -8,7 +8,7 @@
 (def artifact-schema "kotoba-js-artifact/v1")
 (def floating-point-policy "ieee-754-f32-f64-v7")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :f32 :f64 :string :keyword :map :bool :option-i64 :result-i64
+(def ^:private value-types #{:i64 :f32 :f64 :string :keyword :symbol :map :bool :option-i64 :result-i64
                              :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
@@ -208,6 +208,7 @@
            :f64 "assertF64("
            :string "assertString("
            :keyword "assertKeyword("
+           :symbol "assertSymbol("
            :map "assertMap("
            :bool "assertBool("
            :option-i64 "assertOptionI64("
@@ -594,6 +595,9 @@
       (= op 'keyword-name)
       (do (require-arity! op args 1)
           (require-type! (first types) :keyword (first args)) :string)
+      (= op 'symbol)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :string (first args)) :symbol)
       (= op 'xml-path-count)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
@@ -1344,6 +1348,7 @@
       (= op 'string-fold-case) (str "stringFoldCase(" (a (first args)) ")")
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
       (= op 'keyword-name) (str "keywordName(" (a (first args)) ")")
+      (= op 'symbol) (str "symbolFromString(" (a (first args)) ")")
       (= op 'xml-path-count) (str "xmlPathCount(" (a (first args)) "," (a (second args)) ")")
       (= op 'xml-name-count) (str "xmlNameCount(" (a (first args)) "," (a (second args)) ")")
       (= op 'xml-name-text) (str "xmlNameText(" (a (nth args 0)) "," (a (nth args 1)) ","
@@ -2112,6 +2117,10 @@
              "throw new Error('invalid-keyword-source');return assertKeyword(':'+v);};"
              "const keywordName=v=>{v=assertKeyword(v).slice(1);const i=v.lastIndexOf('/');"
              "return assertString(i<0?v:v.slice(i+1));};"
+             "const assertSymbol=v=>{if(typeof v!=='string'||v.length===0||"
+             "/\\s|[\\[\\]{}()\"',;`~^\\\\]/u.test(v))throw new Error('invalid-symbol');"
+             "if(utf8Bytes(v)>" max-keyword-bytes ")throw new Error('symbol-too-large');return v;};"
+             "const symbolFromString=v=>assertSymbol(assertString(v));"
              "const makeMap=entries=>{if(!Array.isArray(entries)||entries.length>" max-map-entries
              ")throw new Error('map-too-large');const seen=new Set();const out=[];"
              "for(const entry of entries){if(!Array.isArray(entry)||entry.length!==2)throw new Error('invalid-map');"
