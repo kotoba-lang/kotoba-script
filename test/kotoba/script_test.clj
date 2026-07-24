@@ -22,6 +22,30 @@
     (is (str/includes? source "let fuel=512;"))
     (is (not (re-find #"globalThis|window|document|eval" source)))))
 
+(deftest lexical-bindings-have-unique-js-names
+  (let [shadow-kir
+        {:format :kotoba.kir/v4 :entry nil :exports ['shadow 'sequential 'nested]
+         :effects #{}
+         :functions
+         [{:name 'shadow :params ['y] :param-types [:i64] :result :i64 :effects #{}
+           :body '(let [y (if (< y 0) (- y) y)] y)}
+          {:name 'sequential :params ['x] :param-types [:i64] :result :i64 :effects #{}
+           :body '(let [x (+ x 1) y (+ x 1) x (+ y 1)] x)}
+          {:name 'nested :params ['x] :param-types [:i64] :result :i64 :effects #{}
+           :body '(let [x (+ x 1)] (let [x (+ x 1)] x))}]}
+        source (script/emit shadow-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.shadow(-5n)!==5n)process.exit(2);"
+                "if(x.sequential(1n)!==4n)process.exit(3);"
+                "if(x.nested(1n)!==3n)process.exit(4)})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "function k$shadow(k$y$1)"))
+    (is (str/includes? source "const k$y$2="))
+    (is (= source (script/emit shadow-kir)))))
+
 (deftest i32-wrapping-shift-and-xorshift-profile-is-explicit
   (let [functions
         (mapv (fn [[name params body]]

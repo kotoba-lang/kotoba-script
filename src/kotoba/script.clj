@@ -1134,8 +1134,11 @@
 
 (declare emit-expr)
 
-(defn- emit-call [op args env functions]
-  (let [a #(emit-expr % env functions)]
+(defn- fresh-js-name [counter name]
+  (str (js-name name) "$" (vswap! counter inc)))
+
+(defn- emit-call [op args env functions counter]
+  (let [a #(emit-expr % env functions counter)]
     (cond
       (= op '+) (str "i64(" (str/join " + " (map a args)) ")")
       (= op '-) (if (= 1 (count args))
@@ -1179,10 +1182,14 @@
       (= op 'result-error-of) (str "parametricResultError(" (type-js (first args)) ","
                                    (a (second args)) ",()=>" (a (nth args 2)) ")")
       (= op 'result-match-of)
-      (let [[type result ok-name ok-body err-name err-body] args]
+      (let [[type result ok-name ok-body err-name err-body] args
+            ok-js-name (fresh-js-name counter ok-name)
+            err-js-name (fresh-js-name counter err-name)]
         (str "parametricResultMatch(" (type-js type) "," (a result) ","
-             "(" (js-name ok-name) ")=>" (emit-expr ok-body (assoc env ok-name (js-name ok-name)) functions) ","
-             "(" (js-name err-name) ")=>" (emit-expr err-body (assoc env err-name (js-name err-name)) functions) ")"))
+             "(" ok-js-name ")=>"
+             (emit-expr ok-body (assoc env ok-name ok-js-name) functions counter) ","
+             "(" err-js-name ")=>"
+             (emit-expr err-body (assoc env err-name err-js-name) functions counter) ")"))
       (= op 'variant-new)
       (let [[type tag payload] args]
         (str "makeVariant(" (type-js type) "," (pr-str (str tag)) "," (a payload) ")"))
@@ -1190,8 +1197,10 @@
       (let [[type value branches] args]
         (str "matchVariant(" (type-js type) "," (a value) ",Object.freeze(["
              (str/join "," (map (fn [[tag binder body]]
-                                  (str "Object.freeze([" (pr-str (str tag)) ",(" (js-name binder)
-                                       ")=>" (emit-expr body (assoc env binder (js-name binder)) functions) "])"))
+                                  (let [binder-js-name (fresh-js-name counter binder)]
+                                    (str "Object.freeze([" (pr-str (str tag)) ",(" binder-js-name
+                                         ")=>" (emit-expr body (assoc env binder binder-js-name)
+                                                          functions counter) "])")))
                                 branches)) "]))"))
       (= op 'option-some-of)
       (str "makeGenericOption(" (type-js (first args)) ",true," (a (second args)) ")")
@@ -1203,10 +1212,11 @@
       (str "genericOptionValue(" (type-js (first args)) "," (a (second args)) ",()=>"
            (a (nth args 2)) ")")
       (= op 'option-match)
-      (let [[type value none-body some-name some-body] args]
+      (let [[type value none-body some-name some-body] args
+            some-js-name (fresh-js-name counter some-name)]
         (str "matchGenericOption(" (type-js type) "," (a value) ",()=>" (a none-body) ","
-             "(" (js-name some-name) ")=>"
-             (emit-expr some-body (assoc env some-name (js-name some-name)) functions) ")"))
+             "(" some-js-name ")=>"
+             (emit-expr some-body (assoc env some-name some-js-name) functions counter) ")"))
       (= op 'hetero-vector-new)
       (str "makeHeterogeneousVector(" (type-js (first args)) ",["
            (str/join "," (map a (rest args))) "])")
@@ -1422,36 +1432,45 @@
       (str (js-name op) "(" (str/join "," (map a args)) ")")
       :else (fail! "unsupported KIR operation" {:operation op}))))
 
-(defn emit-expr [form env functions]
-  (cond
-    (integer? form) (bigint-literal form)
-    (instance? Double form) (f64-literal form)
-    (string? form) (js-string form)
-    (keyword? form) (js-string (keyword-text form))
-    (boolean? form) (if form "true" "false")
-    (nil? form) "optionNone"
-    (symbol? form) (or (get env form)
-                       (fail! "unbound KIR symbol" {:symbol form}))
-    (seq? form)
-    (let [[op & args] form]
-      (case op
-        let (let [[bindings body] args
-                  pairs (partition 2 bindings)]
-              (loop [remaining pairs env env bindings-js []]
-                (if-let [[name value] (first remaining)]
-                  (let [n (js-name name)]
-                    (recur (next remaining) (assoc env name n)
-                           (conj bindings-js (str "const " n "="
-                                                  (emit-expr value env functions) ";"))))
-                  (str "(()=>{" (apply str bindings-js) "return "
-                       (emit-expr body env functions) ";})()"))))
-        if (let [[test then else] args]
-             (str "(()=>{const t=" (emit-expr test env functions)
-                  ";return (typeof t==='boolean'?t:t!==0n)?"
-                  (emit-expr then env functions) ":"
-                  (emit-expr else env functions) ";})()"))
-        (emit-call op args env functions)))
-    :else (fail! "unsupported KIR node" {:node form})))
+(defn emit-expr
+  ([form env functions]
+   (emit-expr form env functions (volatile! 0)))
+  ([form env functions counter]
+   (cond
+     (integer? form) (bigint-literal form)
+     (instance? Double form) (f64-literal form)
+     (string? form) (js-string form)
+     (keyword? form) (js-string (keyword-text form))
+     (boolean? form) (if form "true" "false")
+     (nil? form) "optionNone"
+     (symbol? form) (or (get env form)
+                        (fail! "unbound KIR symbol" {:symbol form}))
+     (seq? form)
+     (let [[op & args] form]
+       (case op
+         let (let [[bindings body] args
+                   pairs (partition 2 bindings)]
+               (loop [remaining pairs env env bindings-js []]
+                 (if-let [[name value] (first remaining)]
+                   (let [n (fresh-js-name counter name)]
+                     ;; A binding is visible only after its initializer. Use
+                     ;; the old environment for VALUE, then extend it for all
+                     ;; later bindings and BODY. The unique JS name prevents
+                     ;; a `const` temporal-dead-zone from capturing an outer
+                     ;; Kotoba binding with the same source name.
+                     (recur (next remaining) (assoc env name n)
+                            (conj bindings-js
+                                  (str "const " n "="
+                                       (emit-expr value env functions counter) ";"))))
+                   (str "(()=>{" (apply str bindings-js) "return "
+                        (emit-expr body env functions counter) ";})()"))))
+         if (let [[test then else] args]
+              (str "(()=>{const t=" (emit-expr test env functions counter)
+                   ";return (typeof t==='boolean'?t:t!==0n)?"
+                   (emit-expr then env functions counter) ":"
+                   (emit-expr else env functions counter) ";})()"))
+         (emit-call op args env functions counter)))
+     :else (fail! "unsupported KIR node" {:node form}))))
 
 (defn- ast-nodes [^Node root]
   (tree-seq #(some? (.getFirstChild ^Node %))
@@ -1572,16 +1591,18 @@
         function-source
         (str/join "\n"
                   (map (fn [{:keys [name params body]}]
-                         (let [env (into {} (map (juxt identity js-name) params))
+                         (let [counter (volatile! 0)
+                               param-js-names (mapv #(fresh-js-name counter %) params)
+                               env (zipmap params param-js-names)
                                {:keys [param-types result]} (get signatures name)
                                guards (apply str
-                                             (map (fn [param type]
-                                                    (str (js-name param) "="
-                                                         (guard-expr type (js-name param)) ";"))
-                                                  params param-types))]
+                                             (map (fn [param-js-name type]
+                                                    (str param-js-name "="
+                                                         (guard-expr type param-js-name) ";"))
+                                                  param-js-names param-types))]
                            (str "function " (js-name name) "("
-                                (str/join "," (map js-name params)) "){charge();" guards "return "
-                                (guard-expr result (emit-expr body env functions)) ";}")))
+                                (str/join "," param-js-names) "){charge();" guards "return "
+                                (guard-expr result (emit-expr body env functions counter)) ";}")))
                        (:functions kir)))
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
