@@ -586,6 +586,10 @@
       (= op 'string-contains?)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'string-code-point-at)
+      (do (require-arity! op args 2)
+          (require-type! (first types) :string (first args))
+          (require-type! (second types) :i64 (second args)) :i64)
       (= op 'string-fold-case)
       (do (require-arity! op args 1)
           (require-type! (first types) :string (first args)) :string)
@@ -1355,6 +1359,7 @@
       (= op 'string-replace-all) (str "stringReplaceAll(" (a (first args)) ","
                                       (a (second args)) "," (a (nth args 2)) ")")
       (= op 'string-contains?) (str "stringContains(" (a (first args)) "," (a (second args)) ")")
+      (= op 'string-code-point-at) (str "stringCodePointAt(" (a (first args)) "," (a (second args)) ")")
       (= op 'string-fold-case) (str "stringFoldCase(" (a (first args)) ")")
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
       (= op 'keyword-name) (str "keywordName(" (a (first args)) ")")
@@ -1971,6 +1976,15 @@
              "const stringContains=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
              "if(needle.length===0)throw new Error('empty-string-search-needle');"
              "return value.includes(needle)?1n:0n;};"
+             "const stringCodePointAt=(value,offset)=>{value=assertString(value);offset=Number(offset);"
+             "const bytes=new TextEncoder().encode(value);"
+             "if(!Number.isSafeInteger(offset)||offset<0||offset>=bytes.length)throw new Error('string-code-point-offset-bounds');"
+             "const b0=bytes[offset];if(b0>=0x80&&b0<0xc0)throw new Error('string-code-point-boundary');"
+             "let cp,width;if(b0<0x80){cp=b0;width=1;}else if(b0<0xe0){cp=b0&0x1f;width=2;}"
+             "else if(b0<0xf0){cp=b0&0x0f;width=3;}else{cp=b0&0x07;width=4;}"
+             "for(let i=1;i<width;i++){const b=bytes[offset+i];"
+             "if(b===undefined||b<0x80||b>=0xc0)throw new Error('string-malformed-utf8');cp=(cp<<6)|(b&0x3f);}"
+             "return BigInt(cp);};"
              "const stringFoldCase=v=>{v=assertString(v);return assertString(v.toLowerCase());};"
              "const assertStringIndex=v=>{if(!Array.isArray(v)||v.length>" max-compact-graph-items
              ")throw new Error('invalid-string-index');let bytes=0,previous=null;const out=v.map(e=>{"
