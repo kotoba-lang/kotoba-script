@@ -573,6 +573,31 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "stringContains"))
     (is (str/includes? source "stringFoldCase")))
+
+(deftest string-code-point-at-decodes-utf8-at-byte-offset
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['cp]
+             :effects #{}
+             :functions [{:name 'cp :params ['s 'off]
+                          :param-types [:string :i64] :result :i64 :effects #{}
+                          :body '(string-code-point-at s off)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                ;; "aあ𝟘0": a@0=0x61, あ@1=0x3042(3B), 𝟘@4=0x1d7d8(4B), 0@8=0x30
+                "if(x.cp('a\u3042\ud835\udfd80',0n)!==97n)process.exit(2);"
+                "if(x.cp('a\u3042\ud835\udfd80',1n)!==12354n)process.exit(3);"
+                "if(x.cp('a\u3042\ud835\udfd80',4n)!==120792n)process.exit(4);"
+                "if(x.cp('a\u3042\ud835\udfd80',8n)!==48n)process.exit(5);"
+                ;; offset 2 is mid-code-point (continuation byte) -> trap
+                "try{x.cp('a\u3042\ud835\udfd80',2n);process.exit(6)}"
+                "catch(e){if(e.message!=='string-code-point-boundary')process.exit(7)}"
+                ;; offset 9 == byte length -> out of bounds
+                "try{x.cp('a\u3042\ud835\udfd80',9n);process.exit(8)}"
+                "catch(e){if(e.message!=='string-code-point-offset-bounds')process.exit(9)}})")
+        result (shell/sh "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "stringCodePointAt"))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"type mismatch"
                         (script/emit
                          {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
