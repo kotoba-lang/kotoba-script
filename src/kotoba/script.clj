@@ -48,6 +48,9 @@
    (cond
      (contains? value-types type)
      type
+     (and (vector? type) (= 2 (count type)) (= :ref (first type))
+          (keyword? (second type)) (namespace (second type)))
+     type
      (and (vector? type) (= 3 (count type)) (= :result (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
@@ -168,10 +171,17 @@
 (declare validate-value-type! parametric-result-type? variant-type? generic-option-type?
          heterogeneous-vector-type? typed-set-type? canonical-typed-map-type? record-type?)
 
+(defn- schema-ref-type?
+  [type]
+  (and (vector? type) (= 2 (count type)) (= :ref (first type))
+       (keyword? (second type)) (namespace (second type))))
+
 (defn- type-js [type]
   (validate-value-type! type)
   (cond
     (keyword? type) (pr-str (if (= type :document) "doc" (name type)))
+    (schema-ref-type? type)
+    (str "Object.freeze(['ref'," (pr-str (str (second type))) "])")
     (parametric-result-type? type)
     (str "Object.freeze(['result'," (type-js (second type)) ","
          (type-js (nth type 2)) "])" )
@@ -197,11 +207,11 @@
                               (str "Object.freeze([" (pr-str (str tag)) ","
                                    (type-js payload-type) "] )"))
                             (nth type 2))) "])])")))
-
 (defn- guard-expr [type expression]
   (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
           (heterogeneous-vector-type? type) (typed-set-type? type)
-          (canonical-typed-map-type? type) (record-type? type))
+          (canonical-typed-map-type? type) (record-type? type)
+          (schema-ref-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
     (str (case type
            :f32 "assertF32("
@@ -219,7 +229,6 @@
            :disjoint-set-i64 "assertDisjointSetI64("
            :document "assertDoc("
            "assertI64(") expression ")")))
-
 (defn- utf8-byte-count
   "Count UTF-8 bytes while rejecting unpaired UTF-16 surrogates. Java's
   default encoder replaces malformed input, so validation must be explicit."
@@ -270,11 +279,26 @@
 
 (declare infer-type)
 
+(defn- nominal-type-identity [type]
+  (cond
+    (schema-ref-type? type) (second type)
+    (or (record-type? type) (variant-type? type)) (second type)
+    :else nil))
+
+(defn- same-expression-type?
+  "Exact structural equality by default; [:ref R] and [:variant/:record R ...]
+  are interchangeable when they share the same qualified nominal identity."
+  [actual expected]
+  (or (= actual expected)
+      (and (or (schema-ref-type? actual) (schema-ref-type? expected))
+           (= (nominal-type-identity actual)
+              (nominal-type-identity expected))
+           (some? (nominal-type-identity actual)))))
+
 (defn- require-type! [actual expected form]
-  (when-not (= expected actual)
+  (when-not (same-expression-type? actual expected)
     (fail! "KIR expression type mismatch"
            {:expected expected :actual actual :node form})))
-
 (defn- require-arity! [op args expected]
   (when-not (cond
               (= expected :positive) (pos? (count args))
@@ -1840,6 +1864,10 @@
              "if(!Array.isArray(v)||v.length!==3||!sameType(v[0],t)||typeof v[1]!=='string')throw new Error('invalid-variant');"
              "const c=t[2].find(c=>c[0]===v[1]);if(!c)throw new Error('unknown-variant-case');"
              "return Object.freeze([t,v[1],assertTypedValue(c[1],v[2],d+1,s)]);}"
+             "if(Array.isArray(t)&&t.length===2&&t[0]==='ref'){"
+             "if(!Array.isArray(v)||!Array.isArray(v[0])||(v[0][0]!=='variant'&&v[0][0]!=='record')||v[0][1]!==t[1])"
+             "throw new Error('invalid-schema-ref');"
+             "return assertTypedValue(v[0],v,d,s);}"
              "throw new Error('invalid-type-descriptor');};"
              "const assertParametricResult=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
              "const makeParametricResult=(t,tag,payload)=>assertParametricResult(t,[tag,payload]);"
@@ -1882,6 +1910,11 @@
              "for(let i=0;i<n;i++){let c=compareTyped(t[1],ai[i][0],bi[i][0]);if(c)return c;"
              "c=compareTyped(t[2],ai[i][1],bi[i][1]);if(c)return c;}return cmp(ai.length,bi.length);}"
              "if(Array.isArray(t)&&t[0]==='record')return compareList(t[2].map(f=>f[1]),a.slice(1),b.slice(1));"
+             "if(Array.isArray(t)&&t[0]==='ref'){"
+             "if(!Array.isArray(a)||!Array.isArray(b)||!Array.isArray(a[0])||!Array.isArray(b[0])||a[0][1]!==t[1]||b[0][1]!==t[1])"
+             "throw new Error('invalid-schema-ref');"
+             "if(!sameType(a[0],b[0]))throw new Error('schema-ref-type-mismatch');"
+             "return compareTyped(a[0],a,b);}"
              "throw new Error('unordered-value-type');};"
              "const assertTypedSet=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
              "const makeTypedSet=(t,items)=>assertTypedSet(t,[t,items]);"
