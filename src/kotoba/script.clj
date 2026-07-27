@@ -514,6 +514,10 @@
       (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :keyword)
       (= op 'document-sha256)
       (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :string)
+      (= op 'document-print)
+      (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :string)
+      (= op 'document-read)
+      (do (require-arity! op args 1) (require-type! (first types) :string (first args)) :document)
       (= op 'document-equal?)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :document arg))
@@ -1356,6 +1360,8 @@
                                 (partition 2 args))) "])")
       (= op 'document-count) (str "docCount(" (a (first args)) ")")
       (= op 'document-sha256) (str "docSha256(" (a (first args)) ")")
+      (= op 'document-print) (str "docPrint(" (a (first args)) ")")
+      (= op 'document-read) (str "docRead(" (a (first args)) ")")
       (= op 'document-kind) (str "docKind(" (a (first args)) ")")
       (= op 'document-equal?) (str "docEqual(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-at) (str "docVectorAt(" (a (first args)) "," (a (second args)) ")")
@@ -2095,6 +2101,47 @@
              "const sha256Hex=bytes=>{const K=new Uint32Array([1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1955562222,2024104815,2227730452,2361852424,2428436474,2756734187,3204031479,3329325298]);let h0=1779033703,h1=3144134277,h2=1013904242,h3=2773480762,h4=1359893119,h5=2600822924,h6=528734635,h7=1541459225;const l=bytes.length;const bitLen=l*8;const withOne=new Uint8Array(((l+9+63)&~63));withOne.set(bytes);withOne[l]=0x80;const dv=new DataView(withOne.buffer);dv.setUint32(withOne.length-4,bitLen>>>0,false);dv.setUint32(withOne.length-8,Math.floor(bitLen/0x100000000),false);const rotr=(x,n)=>((x>>>n)|(x<<(32-n)))>>>0;const w=new Uint32Array(64);for(let i=0;i<withOne.length;i+=64){for(let j=0;j<16;j++)w[j]=dv.getUint32(i+j*4,false);for(let j=16;j<64;j++){const s0=rotr(w[j-15],7)^rotr(w[j-15],18)^(w[j-15]>>>3);const s1=rotr(w[j-2],17)^rotr(w[j-2],19)^(w[j-2]>>>10);w[j]=(w[j-16]+s0+w[j-7]+s1)>>>0;}let a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;for(let j=0;j<64;j++){const S1=rotr(e,6)^rotr(e,11)^rotr(e,25);const ch=(e&f)^((~e)&g);const t1=(h+S1+ch+K[j]+w[j])>>>0;const S0=rotr(a,2)^rotr(a,13)^rotr(a,22);const maj=(a&b)^(a&c)^(b&c);const t2=(S0+maj)>>>0;h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;}h0=(h0+a)>>>0;h1=(h1+b)>>>0;h2=(h2+c)>>>0;h3=(h3+d)>>>0;h4=(h4+e)>>>0;h5=(h5+f)>>>0;h6=(h6+g)>>>0;h7=(h7+h)>>>0;}const out=new Uint8Array(32);const ov=new DataView(out.buffer);[h0,h1,h2,h3,h4,h5,h6,h7].forEach((x,i)=>ov.setUint32(i*4,x,false));return Array.from(out).map(b=>b.toString(16).padStart(2,'0')).join('');};"
              "const docCanonicalBytes=node=>{const out=[];const enc=new TextEncoder();const emit=n=>out.push(n&255);const emitStr=s=>{const b=enc.encode(s);for(const x of b)emit(x);};const emitLenStr=s=>{const b=enc.encode(s);emitStr(String(b.length));emit(58);for(const x of b)emit(x);};const walk=n=>{n=assertDoc(n);const t=n[0];if(t==='null'){emit(110);return;}if(t==='bool'){emit(98);emit(n[1]?116:102);return;}if(t==='i64'){emit(105);emitStr(String(n[1]));emit(59);return;}if(t==='f64'){const v=Object.is(n[1],-0)?0:n[1];const buf=new ArrayBuffer(8);const dv=new DataView(buf);dv.setFloat64(0,v,true);emit(102);emitStr(String(dv.getBigInt64(0,true)));emit(59);return;}if(t==='string'){emit(115);emitLenStr(n[1]);return;}if(t==='keyword'){emit(107);emitLenStr(String(n[1]));return;}if(t==='vector'){emit(118);emitStr(String(n[1].length));emit(58);for(const it of n[1])walk(it);return;}if(t==='map'){emit(109);emitStr(String(n[1].length));emit(58);for(const e of n[1]){emit(75);emitLenStr(String(e[0]));walk(e[1]);}return;}throw new Error('unknown-doc-tag');};walk(node);return new Uint8Array(out);};"
              "const docSha256=v=>sha256Hex(docCanonicalBytes(assertDoc(v)));"
+             "const bytesToHex=bytes=>Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join('');"
+             "const hexToBytes=s=>{if(typeof s!=='string')throw new Error('document-read-string');"
+             "if(s.length%2)throw new Error('document-read-hex-odd');"
+             "if(s.length>1048576)throw new Error('document-read-hex-limit');"
+             "if(!/^[0-9a-f]*$/.test(s))throw new Error('document-read-hex-charset');"
+             "const out=new Uint8Array(s.length/2);"
+             "for(let i=0;i<out.length;i++)out[i]=parseInt(s.substr(i*2,2),16);"
+             "return out;};"
+             "const docFromCanonicalBytes=bytes=>{let i=0;const len=bytes.length;"
+             "const take=()=>{if(i>=len)throw new Error('document-read-truncated');return bytes[i++];};"
+             "const peek=()=>{if(i>=len)throw new Error('document-read-truncated');return bytes[i];};"
+             "const takeUntil=sep=>{const start=i;while(i<len&&bytes[i]!==sep)i++;"
+             "if(i>=len)throw new Error('document-read-missing-term');"
+             "const s=new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(start,i));i++;return s;};"
+             "const takeLenStr=()=>{const n=Number(takeUntil(58));"
+             "if(!Number.isInteger(n)||n<0||n>65536)throw new Error('document-read-len');"
+             "if(i+n>len)throw new Error('document-read-trunc-str');"
+             "const s=new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(i,i+n));i+=n;return s;};"
+             "const walk=()=>{const tag=take();"
+             "if(tag===110)return Object.freeze(['null']);"
+             "if(tag===98){const b=take();if(b===116)return Object.freeze(['bool',true]);"
+             "if(b===102)return Object.freeze(['bool',false]);throw new Error('document-read-bool');}"
+             "if(tag===105){const s=takeUntil(59);return Object.freeze(['i64',BigInt(s)]);}"
+             "if(tag===102){const bits=BigInt(takeUntil(59));const buf=new ArrayBuffer(8);const dv=new DataView(buf);"
+             "dv.setBigInt64(0,bits,true);return Object.freeze(['f64',dv.getFloat64(0,true)]);}"
+             "if(tag===115)return Object.freeze(['string',takeLenStr()]);"
+             "if(tag===107){const k=takeLenStr();if(!k.startsWith(':'))throw new Error('document-read-kw');"
+             "return Object.freeze(['keyword',k]);}"
+             "if(tag===118){const n=Number(takeUntil(58));if(!Number.isInteger(n)||n<0||n>32)throw new Error('document-read-vc');"
+             "const items=[];for(let k=0;k<n;k++)items.push(walk());return Object.freeze(['vector',Object.freeze(items)]);}"
+             "if(tag===109){const n=Number(takeUntil(58));if(!Number.isInteger(n)||n<0||n>32)throw new Error('document-read-mc');"
+             "const entries=[];for(let k=0;k<n;k++){if(take()!==75)throw new Error('document-read-K');"
+             "const ks=takeLenStr();if(!ks.startsWith(':'))throw new Error('document-read-mapkw');"
+             "entries.push(Object.freeze([ks,walk()]));}"
+             "return Object.freeze(['map',Object.freeze(entries)]);}"
+             "throw new Error('document-read-tag');};"
+             "const doc=walk();if(i!==len)throw new Error('document-read-trailing');return assertDoc(doc);};"
+             "const docPrint=v=>{const hex=bytesToHex(docCanonicalBytes(assertDoc(v)));"
+             "if(hex.length>65536)throw new Error('document-print-limit');return hex;};"
+             "const docRead=s=>{s=assertString(s);if(s.length>65536)throw new Error('document-read-limit');"
+             "return docFromCanonicalBytes(hexToBytes(s));};"
              "const docEqual=(a,b)=>{a=assertDoc(a);b=assertDoc(b);const eq=(x,y)=>{if(x[0]!==y[0])return false;const t=x[0];if(t==='null')return true;if(t!=='vector'&&t!=='map')return x[1]===y[1];if(x[1].length!==y[1].length)return false;if(t==='vector'){for(let i=0;i<x[1].length;i++)if(!eq(x[1][i],y[1][i]))return false;return true;}for(let i=0;i<x[1].length;i++)if(x[1][i][0]!==y[1][i][0]||!eq(x[1][i][1],y[1][i][1]))return false;return true;};return eq(a,b);};"
              "const docVectorAt=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);const ok=index>=0n&&index<BigInt(items.length);return makeGenericOption(docType,ok,ok?items[Number(index)]:undefined);};"
              "const docMapEntryAt=(v,index)=>{const items=docMapEntries(v);index=assertI64(index);"
