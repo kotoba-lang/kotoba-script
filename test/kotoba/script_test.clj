@@ -1219,6 +1219,39 @@
     (is (str/includes? source "const docKind="))
     (is (str/includes? source "const docEqual="))))
 
+(deftest document-sha256-is-stable-and-content-sensitive
+  (let [functions
+        [{:name 'null-digest :params [] :param-types [] :result :string :effects #{}
+          :body '(document-sha256 (document-null))}
+         {:name 'hello-digest :params [] :param-types [] :result :string :effects #{}
+          :body '(document-sha256
+                   (document-map :tag (document-string "div")
+                                 :text (document-string "Hello")))}
+         {:name 'world-digest :params [] :param-types [] :result :string :effects #{}
+          :body '(document-sha256
+                   (document-map :tag (document-string "div")
+                                 :text (document-string "World")))}
+         {:name 'digest :params ['value] :param-types [:document]
+          :result :string :effects #{} :body '(document-sha256 value)}]
+        source (script/emit {:format :kotoba.kir/v4 :entry nil
+                             :exports (mapv :name functions) :effects #{} :functions functions})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        ;; golden for single-byte encoding of document-null ("n")
+        null-hex "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9"
+        result
+        (shell/sh
+         "node" "--input-type=module" "-e"
+         (str "import('data:text/javascript;base64," encoded
+              "').then(m=>{const x=m.instantiateKotoba({});"
+              "const n=x['null-digest']();if(n!=='" null-hex "'){console.error('null',n);process.exit(2);}"
+              "const h=x['hello-digest'](),w=x['world-digest']();"
+              "if(!/^[0-9a-f]{64}$/.test(h)||h===w||h!==x.digest(['map',[[':tag',['string','div']],[':text',['string','Hello']]]]))process.exit(3);"
+              "if(x.digest(['f64',-0])!==x.digest(['f64',0]))process.exit(4);"
+              "})"))]
+    (is (zero? (:exit result)) (str (:err result) (:out result)))
+    (is (str/includes? source "const docSha256="))
+    (is (str/includes? source "const docCanonicalBytes="))))
+
 (deftest bounded-document-vectors-have-safe-persistent-operations
   (let [functions
         [{:name 'items :params [] :param-types [] :result :document :effects #{}
