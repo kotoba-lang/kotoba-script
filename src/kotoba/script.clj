@@ -265,7 +265,23 @@
     (into {}
           (map (fn [{:keys [name params param-types result]}]
                  (let [types (if typed? param-types (vec (repeat (count params) :i64)))
-                       result-type (if typed? result :i64)]
+                       ;; An untyped (v3) module used to mean "every value is an
+                       ;; i64 word", so forcing the result to :i64 was right.
+                       ;; Under language profile 5 it is not: comparisons and
+                       ;; predicates infer :bool, and an unannotated defn takes
+                       ;; its body's type, so a v3 module can carry a :bool
+                       ;; result. Forcing :i64 wrapped a boolean in assertI64
+                       ;; and every such export threw `invalid-i64` at the first
+                       ;; call -- measured on `(defn test-pure [] (= (+ 20 22)
+                       ;; 42))`, which is what a Kotoba test looks like.
+                       ;;
+                       ;; Only :bool is honoured here. Everything else in a v3
+                       ;; module is still an i64 word, and reading an arbitrary
+                       ;; declared result out of an untyped KIR would weaken the
+                       ;; guard rather than correct it.
+                       result-type (cond typed?          result
+                                         (= :bool result) :bool
+                                         :else            :i64)]
                    (when-not (and (symbol? name) (nil? (namespace name))
                                   (vector? params) (vector? types)
                                   (every? #(and (symbol? %) (nil? (namespace %))) params)
