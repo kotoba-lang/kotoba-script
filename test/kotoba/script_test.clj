@@ -18,6 +18,29 @@
   #"\bglobalThis\b|\bwindow\s*[.\[]|\bdocument\s*[.\[]|(?<![\w$.-])eval\s*\(|new\s+DOMParser|(?<![\w$.-])fetch\s*\(|new\s+XMLHttpRequest")
 
 
+(defn- run-node
+  "`clojure.java.shell/sh`, except that a `node --input-type=module -e <src>`
+  invocation runs the source from a temp `.mjs` file instead of from argv.
+
+  Linux caps a *single* argv entry at MAX_ARG_STRLEN = 128 KiB, well below the
+  macOS limit, so a test whose emitted module is large enough fails there with
+  `Cannot run program \"node\": error=7, Argument list too long` — a process
+  error, not an assertion failure, which is why it read as a CI-only break
+  rather than a real one. The base64 `data:` import these tests use inflates
+  the module by 4/3 before it ever reaches argv, so the ceiling arrives sooner
+  than the module size suggests.
+
+  Same return shape as `shell/sh` (`{:exit :out :err}`), so call sites are
+  unchanged."
+  [& args]
+  (if (= (take 3 args) '("node" "--input-type=module" "-e"))
+    (let [file (java.io.File/createTempFile "kotoba-script-test-" ".mjs")]
+      (try
+        (spit file (nth args 3))
+        (apply shell/sh "node" (.getPath file) (drop 4 args))
+        (finally (.delete file))))
+    (apply shell/sh args)))
+
 (def kir
   {:format :kotoba.kir/v3 :entry 'main :effects #{}
    :functions [{:name 'add1 :params ['x] :body '(+ x 1)}
@@ -29,7 +52,7 @@
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.main()!==42n)process.exit(2);console.log('42')})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (= "42\n" (:out result)))
     (is (str/includes? source "let fuel=512;"))
@@ -67,7 +90,7 @@
                 "if(x.shadow(-5n)!==5n)process.exit(2);"
                 "if(x.sequential(1n)!==4n)process.exit(3);"
                 "if(x.nested(1n)!==3n)process.exit(4)})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "function k$shadow(k$y$1)"))
     (is (str/includes? source "const k$y$2="))
@@ -99,7 +122,7 @@
                 "if(x.shr(-2147483648n)!==-1n||x.ushr(-1n)!==2147483647n)process.exit(5);"
                 "if(x.next(1n)!==270369n||x.next(270369n)!==67634689n||x.next(67634689n)!==2647435461n)process.exit(6);"
                 "})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const xorshift32="))
     (is (str/includes? source "BigInt.asIntN(32")))
@@ -138,7 +161,7 @@
                 "if(x['nan-bits']()!==9221120237041090560n)process.exit(6);"
                 "if(!Number.isNaN(x['from-bits'](9221120237041090560n)))process.exit(7);"
                 "try{x.bits(1n);process.exit(8)}catch(e){}console.log('f64-ok')})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (= "ieee-754-f32-f64-v7" script/floating-point-policy))
     (is (str/includes? source "floatingPointPolicy:'ieee-754-f32-f64-v7'"))
     (is (zero? (:exit result)) (:err result))
@@ -175,7 +198,7 @@
            :body '(f64-to-bits (f64-div (f64-from-bits 0) (f64-from-bits 0)))}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({});"
@@ -213,7 +236,7 @@
            :result :i64 :effects #{} :body '(f64-to-i64-truncating x)}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({});"
@@ -259,7 +282,7 @@
            :result :i64 :effects #{} :body '(f32-to-i64-truncating x)}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),one=x['from-bits'](1065353216n),"
@@ -296,7 +319,7 @@
                :effects #{} :body '(f64-max x y)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),p=Math.fround(0),n=Math.fround(-0);"
@@ -317,7 +340,7 @@
                :effects #{} :body '(f64-cos-quarter-turn x)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),q=Math.PI/4;"
@@ -340,7 +363,7 @@
                :effects #{} :body '(f64-cos-bounded x)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),limit=8192*Math.PI;"
@@ -364,7 +387,7 @@
                :effects #{} :body '(f64-log-near-one x)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({});"
@@ -386,7 +409,7 @@
                           :result :f64 :effects #{} :body '(f64-atan2-bounded y x)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const f=m.instantiateKotoba({}).atan2;"
@@ -406,7 +429,7 @@
                           :effects #{} :body '(f64-log-bounded x)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),limit=512*Math.LN2;"
@@ -478,7 +501,7 @@
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.main()!==42n||Object.hasOwn(x,'add1'))process.exit(2)})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (not (re-find #"'add1':k\$add1" source))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exports are invalid"
@@ -492,7 +515,7 @@
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(m.kotobaArtifact.entry!==null||x.add1(41n)!==42n)process.exit(2)})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (re-find #"entry:null" source)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exports are invalid"
@@ -516,7 +539,7 @@
                 "if(x['byte-length']('言葉')!==6n)process.exit(3);"
                 "try{x.greet(1n);process.exit(4)}catch(e){if(e.message!=='invalid-string')process.exit(5)}"
                 "try{x.greet('x'.repeat(65536));process.exit(6)}catch(e){if(e.message!=='string-too-large')process.exit(7)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (re-find #"kirFormat:'v4'" source))
     (is (re-find #"valueProfile:'typed-v1'" source))
@@ -557,7 +580,7 @@
                 "catch(e){if(e.message!=='empty-string-replacement-needle')process.exit(4)}"
                 "try{x.replace('x'.repeat(40000),'x','xx');process.exit(5)}"
                 "catch(e){if(e.message!=='string-too-large')process.exit(6)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "stringReplaceAll")))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"type mismatch"
@@ -596,7 +619,7 @@
                 "if(x.contains('This Is The FINAL Decision','final decision')!==0n)process.exit(11);"
                 "if(x['contains-fold']('This Is The FINAL Decision','final decision')!==1n)process.exit(12);"
                 "if(x['contains-fold']('CAFÉ menu','café')!==1n)process.exit(13)})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "stringContains"))
     (is (str/includes? source "stringFoldCase")))
@@ -622,7 +645,7 @@
                 ;; offset 9 == byte length -> out of bounds
                 "try{x.cp('a\u3042\ud835\udfd80',9n);process.exit(8)}"
                 "catch(e){if(e.message!=='string-code-point-offset-bounds')process.exit(9)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "stringCodePointAt"))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"type mismatch"
@@ -657,7 +680,7 @@
                 "catch(e){if(e.message!=='invalid-keyword')process.exit(5)}"
                 "try{x.identity(1n);process.exit(6)}"
                 "catch(e){if(e.message!=='invalid-keyword')process.exit(7)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "assertKeyword"))
     (is (str/includes? source "keywordLimits:Object.freeze({valueBytes:512})")))
@@ -684,7 +707,7 @@
                 "if(before[0][1]!==1n||after.length!==2||after[0][0]!==':a'||after[1][0]!==':b')process.exit(3);"
                 "try{x.lookup([[':a',1n],[':a',2n]]);process.exit(4)}"
                 "catch(e){if(e.message!=='duplicate-map-key')process.exit(5)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "mapLimits:Object.freeze({entries:128})"))
     (is (str/includes? source "const makeMap="))))
@@ -716,7 +739,7 @@
                 "for(const bad of [null,undefined,0n,[false,1n],[true]]){try{x['present?'](bad);process.exit(5)}"
                 "catch(e){if(e.message!=='invalid-option-i64')process.exit(6)}}"
                 "try{x.negate(0n);process.exit(7)}catch(e){if(e.message!=='invalid-bool')process.exit(8)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const optionNone=Object.freeze([false])"))
     (is (str/includes? source "booleanProfile:'strict-v1'"))
@@ -754,7 +777,7 @@
                 "if(x['same?'](ok,[true,7n])!==true||x['same?'](err,[false,13n])!==false)process.exit(5);"
                 "for(const bad of [null,undefined,[true],[false],['ok',1n],[true,1]]){try{x['ok?'](bad);process.exit(6)}"
                 "catch(e){if(e.message!=='invalid-result-i64')process.exit(7)}}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "resultProfile:'tagged-i64-i64-v1'"))
     (is (str/includes? source "const assertResultI64="))))
@@ -785,7 +808,7 @@
                 "if(x['nested-error?'](n)!==true)process.exit(4);"
                 "for(const bad of [[true,9n],[false,[true,'wrong']],[false,[true,7]]]){try{x['nested-error?'](bad);process.exit(5)}"
                 "catch(e){if(!['invalid-string','invalid-i64'].includes(e.message))process.exit(6)}}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "parametricAdtLimits:Object.freeze({depth:8,nodes:64,variantCases:32})")))
   (let [too-deep (nth (iterate (fn [t] [:result :i64 t]) :bool) 9)]
@@ -814,7 +837,7 @@
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.describe([true,'安全'])!==6n||x.describe([false,17n])!==17n)process.exit(2)})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const parametricResultMatch="))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"different types"
@@ -841,7 +864,7 @@
                 "const r=x.ready();if(r[1]!==':ready'||r[2]!==7n||!Object.isFrozen(r))process.exit(2);"
                 "if(x.describe([t,':ready',9n])!==10n||x.describe([t,':failed','安全'])!==6n)process.exit(3);"
                 "try{x.describe([t,':unknown',1n]);process.exit(4)}catch(e){if(e.message!=='unknown-variant-case')process.exit(5)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "variantCases:32"))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly cover"
@@ -875,7 +898,7 @@
                 "if(x.describe([t,true,'安全'])!==6n||x.describe([t,false])!==7n)process.exit(3);"
                 "try{x.describe([Object.freeze(['option','i64']),false]);process.exit(4)}"
                 "catch(e){if(e.message!=='invalid-generic-option')process.exit(5)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "genericOptionProfile:'typed-tagged-v1'"))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"different types"
@@ -911,7 +934,7 @@
                 "try{x.name([Object.freeze(['vector',Object.freeze(['string','string','bool'])]),7n,'安全',true]);process.exit(4)}"
                 "catch(e){if(e.message!=='invalid-heterogeneous-vector')process.exit(5)}"
                 "try{x.name([t,7n,'安全']);process.exit(6)}catch(e){if(e.message!=='invalid-heterogeneous-vector')process.exit(7)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "heterogeneousVectorLimits:Object.freeze({items:32})"))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly match"
@@ -940,7 +963,7 @@
                :body (list 'record-assoc record-type 'value :x 'x)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded "').then(m=>{"
                      "const x=m.instantiateKotoba({}),v=x['make-vector'](),p=x['make-point']();"
@@ -999,7 +1022,7 @@
                 "try{x.duplicate();process.exit(5)}catch(e){if(e.message!=='duplicate-set-item')process.exit(6)}"
                 "try{x['contains?']([Object.freeze(['set','string']),['1']],1n);process.exit(7)}"
                 "catch(e){if(e.message!=='invalid-typed-set')process.exit(8)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "typedSetLimits:Object.freeze({items:32})"))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"item limit"
@@ -1042,7 +1065,7 @@
                 "try{x['name-of']([ot,'Kotoba',7n,[Object.freeze(['option','string']),false]]);process.exit(4)}"
                 "catch(e){if(e.message!=='invalid-record')process.exit(5)}"
                 "try{x['name-of']([v[0],'Kotoba']);process.exit(6)}catch(e){if(e.message!=='invalid-record')process.exit(7)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "recordLimits:Object.freeze({fields:32})"))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"declared keyword literal"
@@ -1104,7 +1127,7 @@
                 "try{x['count-items'](Array.from({length:16385},()=>0n));process.exit(11)}"
                 "catch(e){if(e.message!=='vector-too-large')process.exit(12)}"
                 "try{x.update(before,2n,3n);process.exit(6)}catch(e){if(e.message!=='vector-index-out-of-range')process.exit(7)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "vectorLimits:Object.freeze({items:16384})"))
     (is (str/includes? source "const makeVector=")))
@@ -1113,7 +1136,7 @@
                           :result :i64 :effects #{} :body '(vector-at v 2)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh "node" "--input-type=module" "-e"
+        result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
                               "').then(m=>{try{m.instantiateKotoba({}).at([1n]);process.exit(2)}"
                               "catch(e){if(e.message!=='vector-index-out-of-range')process.exit(3)}})"))]
@@ -1158,7 +1181,7 @@
                 "for(const bad of [null,[1n],[undefined]]){try{x['count-items'](bad);process.exit(7)}catch(e){}}"
                 "try{x['count-items'](Array.from({length:16385},()=>0));process.exit(8)}"
                 "catch(e){if(e.message!=='vector-f64-too-large')process.exit(9)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "const makeVectorF64="))
     (is (str/includes? source "vectorF64Get(")))
@@ -1186,7 +1209,7 @@
         source (script/emit {:format :kotoba.kir/v4 :entry nil
                              :exports (mapv :name functions) :effects #{} :functions functions})
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh "node" "--input-type=module" "-e"
+        result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
                               "').then(m=>{const x=m.instantiateKotoba({}),i=x.index(),d=x.joined();"
                               "if(x.lookup()!==2n||i.length!==2||i[0][0]!=='a'||d[0].length!==3||x.cycle()!==false)process.exit(2);"
@@ -1229,7 +1252,7 @@
                              :exports (mapv :name functions) :effects #{} :functions functions})
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result
-        (shell/sh
+        (run-node
          "node" "--input-type=module" "-e"
          (str "import('data:text/javascript;base64," encoded
               "').then(m=>{const x=m.instantiateKotoba({}),d=x.doc();"
@@ -1270,7 +1293,7 @@
         ;; golden for single-byte encoding of document-null ("n")
         null-hex "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9"
         result
-        (shell/sh
+        (run-node
          "node" "--input-type=module" "-e"
          (str "import('data:text/javascript;base64," encoded
               "').then(m=>{const x=m.instantiateKotoba({});"
@@ -1315,7 +1338,7 @@
         source (script/emit {:format :kotoba.kir/v4 :entry nil
                              :exports (mapv :name functions) :effects #{} :functions functions})
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({}),v=x.changed(),t=x.tail();"
@@ -1336,7 +1359,7 @@
                               :result :keyword :effects #{}
                               :body '(keyword-from-string "@context")}]})
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh "node" "--input-type=module" "-e"
+        result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
                               "').then(m=>{if(m.instantiateKotoba({})['context-key']()!==':@context')process.exit(2)})"))]
     (is (zero? (:exit result)) (:err result))
@@ -1408,7 +1431,7 @@
                            (list 'typed-map-new type :b 2 :a 1) 0)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({});"
@@ -1481,7 +1504,7 @@
                 "()=>x.text(xml,'html/robot/link',-1n),"
                 "()=>x['name-text'](xml,'link',-1n),"
                 "()=>x['count-name'](xml,'bad/name')]){let trapped=false;try{f()}catch(e){trapped=true}if(!trapped)process.exit(6)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
     (is (not (re-find ambient-access-pattern source)))))
@@ -1505,7 +1528,7 @@
                 "for(const s of " valid-js "){const v=x.parse(s);if(!v[1]||!Number.isFinite(v[2]))process.exit(2)}"
                 "if(!Object.is(x.parse('-0')[2],-0)||x.parse('1e-324')[2]!==0||x.parse('5e-324')[2]!==Number.MIN_VALUE)process.exit(3);"
                 "for(const s of " invalid-js "){const v=x.parse(s);if(v[1])process.exit(4)}})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source
                        "decimalF64Limits:Object.freeze({bytes:64,vector3Bytes:194,finiteOnly:true,rounding:'nearest-ties-even'})"))
@@ -1525,7 +1548,7 @@
                 "if(!ok[1]||!Object.is(ok[2][1],-0)||ok[2][2]!==1.5||ok[2][3]!==Number.MIN_VALUE)process.exit(2);"
                 "for(const s of ['', '1 2', '1 2 3 4', '1,2,3', '1 NaN 3', '1 1e309 3', '1　2　3', ' '.repeat(195)])"
                 "if(x.parse(s)[1])process.exit(3)})")
-        result (shell/sh "node" "--input-type=module" "-e" js)]
+        result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source "vector3Bytes:194"))
     (is (not (re-find #"parseFloat|eval|Function" source)))))
@@ -1538,7 +1561,7 @@
                           :body '(symbol value)}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        result (shell/sh
+        result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
                      "').then(m=>{const x=m.instantiateKotoba({});"
