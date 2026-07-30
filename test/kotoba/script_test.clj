@@ -5,6 +5,19 @@
             [kotoba.script :as script])
   (:gen-class))
 
+(def ambient-access-pattern
+  "Ambient/DOM reach-out in emitted restricted ESM.
+
+  Matches an *access form* — `globalThis`, a property read off `window` /
+  `document`, a call to `eval` / `fetch`, a `new DOMParser` / `new
+  XMLHttpRequest` — not the bare name. The previous version grepped the bare
+  substrings, so the emitter's own error codes (`'document-read-string'`,
+  `'document-read-hex-odd'`, … 19 of them from the W4 document validators)
+  matched it and both guards were permanently red. A guard that always fails
+  protects nothing: a genuine leak looked exactly like the benign string."
+  #"\bglobalThis\b|\bwindow\s*[.\[]|\bdocument\s*[.\[]|(?<![\w$.-])eval\s*\(|new\s+DOMParser|(?<![\w$.-])fetch\s*\(|new\s+XMLHttpRequest")
+
+
 (def kir
   {:format :kotoba.kir/v3 :entry 'main :effects #{}
    :functions [{:name 'add1 :params ['x] :body '(+ x 1)}
@@ -20,7 +33,21 @@
     (is (zero? (:exit result)) (:err result))
     (is (= "42\n" (:out result)))
     (is (str/includes? source "let fuel=512;"))
-    (is (not (re-find #"globalThis|window|document|eval" source)))))
+    (is (not (re-find ambient-access-pattern source)))))
+
+(deftest ambient-access-guard-catches-real-reach-out
+  (testing "the guard fires on each ambient access form"
+    (doseq [leak ["const g=globalThis;" "const d=window.location;"
+                  "document.querySelector('x')" "const v=eval('1+1');"
+                  "new DOMParser().parseFromString(s)" "await fetch('http://x')"
+                  "new XMLHttpRequest()" "const w=window['location'];"]]
+      (is (re-find ambient-access-pattern leak) (str "missed: " leak))))
+  (testing "and not on the emitter's own error codes or ordinary identifiers"
+    (doseq [benign ["throw new Error('document-read-string')"
+                    "throw new Error('document-read-hex-odd')"
+                    "const documentBytes=0;" "const evaluated=1;"
+                    "obj.fetchCount=2;" "let prefetch=3;"]]
+      (is (not (re-find ambient-access-pattern benign)) (str "false positive: " benign)))))
 
 (deftest lexical-bindings-have-unique-js-names
   (let [shadow-kir
@@ -1457,7 +1484,7 @@
         result (shell/sh "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
-    (is (not (re-find #"DOMParser|document|fetch|XMLHttpRequest" source)))))
+    (is (not (re-find ambient-access-pattern source)))))
 
 (deftest bounded-decimal-f64-parser-is-finite-typed-and-preserves-negative-zero
   (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['parse]
