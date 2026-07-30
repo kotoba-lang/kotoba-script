@@ -337,7 +337,9 @@
             (fail! "KIR equality operands have different types" {:types types :node args}))
           (when-not (contains? #{:i64 :keyword :bool :option-i64 :result-i64 :vector-i64} (first types))
             (fail! "KIR equality type is unsupported" {:type (first types)}))
-          :i64)
+          ;; Profile 5: `=` is `:bool` too — leaving it `:i64` while `<` is
+          ;; `:bool` would make `(and (= a b) (< c d))` untypeable.
+          :bool)
 
       (= op 'bool-not)
       (do (require-arity! op args 1)
@@ -584,9 +586,12 @@
       (do (require-arity! op args 1) (require-type! (first types) :document (first args))
           [:option :f64])
 
+      ;; Language profile 5: comparisons are `:bool`-typed. The emitted value is
+      ;; still the 0/1 word, matching the KIR interpreter and wasm32, so only the
+      ;; static type changes here.
       (contains? '#{< > <= >=} op)
       (do (require-arity! op args 2)
-          (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
+          (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :bool)
 
       (= op 'pair)
       (do (require-arity! op args 2)
@@ -1162,7 +1167,14 @@
       (let [types (if (= :kotoba.kir/v4 (:format kir))
                     param-types (vec (repeat (count params) :i64)))
             actual (infer-type body (zipmap params types) signatures)
-            expected (if (= :kotoba.kir/v4 (:format kir)) result :i64)]
+            expected (if (= :kotoba.kir/v4 (:format kir)) result :i64)
+            ;; v3 is the pre-typed format where every value is the same 64-bit
+            ;; word; `:bool` is that word too (profile 5 changed the static type
+            ;; of comparisons, not their representation). So a v3 body that ends
+            ;; in a comparison still satisfies v3's `:i64` result.
+            actual (if (and (= :bool actual) (not= :kotoba.kir/v4 (:format kir)))
+                     :i64
+                     actual)]
         (require-type! actual expected name)))
     signatures))
 
@@ -1191,10 +1203,16 @@
       (= op 'i32-shift-right) (str "i32Shr(" (a (first args)) "," (a (second args)) ")")
       (= op 'u32-shift-right) (str "u32Shr(" (a (first args)) "," (a (second args)) ")")
       (= op 'xorshift32) (str "xorshift32(" (a (first args)) ")")
-      (= op '=) (str "(valueEqual(" (a (first args)) "," (a (second args)) ")?1n:0n)")
+      ;; Profile 5: comparisons are `:bool`. In the restricted-ESM target a
+      ;; `:bool` IS a JS boolean (see `assertBool` / booleanProfile strict-v1),
+      ;; so emit the boolean directly rather than the 1n/0n word the i64-typed
+      ;; version produced. KIR and wasm32 keep the 0/1 word; the shared thing is
+      ;; the type, not the representation.
+      (= op '=) (str "valueEqual(" (a (first args)) "," (a (second args)) ")")
       (contains? '#{< > <= >=} op)
+      ;; Profile 5: `:bool` is a JS boolean in this target (see `=` above).
       (let [js-op (case op < "<" > ">" <= "<=" >= ">=")]
-        (str "((" (str/join (str " " js-op " ") (map a args)) ")?1n:0n)"))
+        (str "(" (str/join (str " " js-op " ") (map a args)) ")"))
       (= op 'bool-not) (str "(!" (a (first args)) ")")
       (= op 'option-some) (str "optionSome(" (a (first args)) ")")
       (= op 'option-none) "optionNone"
