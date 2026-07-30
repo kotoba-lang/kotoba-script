@@ -645,13 +645,14 @@
                                 :result :keyword :effects #{} :body 'value}
                                {:name 'same? :params ['left 'right]
                                 :param-types [:keyword :keyword]
-                                :result :i64 :effects #{} :body '(= left right)}]}
+                                ;; profile 5: `=` is :bool
+                                :result :bool :effects #{} :body '(= left right)}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.identity(':安全/確認')!==':安全/確認')process.exit(2);"
-                "if(x['same?'](':a',':a')!==1n||x['same?'](':a',':b')!==0n)process.exit(3);"
+                "if(x['same?'](':a',':a')!==true||x['same?'](':a',':b')!==false)process.exit(3);"
                 "try{x.identity('not-a-keyword');process.exit(4)}"
                 "catch(e){if(e.message!=='invalid-keyword')process.exit(5)}"
                 "try{x.identity(1n);process.exit(6)}"
@@ -664,7 +665,7 @@
                         (script/emit
                          {:format :kotoba.kir/v4 :entry nil :exports ['bad] :effects #{}
                           :functions [{:name 'bad :params [] :param-types []
-                                       :result :i64 :effects #{} :body '(= :a 1)}]}))))
+                                       :result :bool :effects #{} :body '(= :a 1)}]}))))
 
 (deftest typed-bounded-maps-use-canonical-persistent-keyword-entries
   (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['lookup 'update]
@@ -702,7 +703,8 @@
            :result :i64 :effects #{} :body '(option-value value 9)}
           {:name 'same-option? :params ['left 'right]
            :param-types [:option-i64 :option-i64]
-           :result :i64 :effects #{} :body '(= left right)}]}
+           ;; profile 5: `=` is :bool
+           :result :bool :effects #{} :body '(= left right)}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -710,7 +712,7 @@
                 "const none=Object.freeze([false]);const some=Object.freeze([true,7n]);"
                 "if(x.negate(true)!==false||x['present?'](none)!==false||x['present?'](some)!==true)process.exit(2);"
                 "if(x['with-default'](none)!==9n||x['with-default'](some)!==7n)process.exit(3);"
-                "if(x['same-option?'](none,[false])!==1n||x['same-option?'](some,[true,7n])!==1n)process.exit(4);"
+                "if(x['same-option?'](none,[false])!==true||x['same-option?'](some,[true,7n])!==true)process.exit(4);"
                 "for(const bad of [null,undefined,0n,[false,1n],[true]]){try{x['present?'](bad);process.exit(5)}"
                 "catch(e){if(e.message!=='invalid-option-i64')process.exit(6)}}"
                 "try{x.negate(0n);process.exit(7)}catch(e){if(e.message!=='invalid-bool')process.exit(8)}})")
@@ -740,7 +742,8 @@
           {:name 'error :params ['result 'fallback] :param-types [:result-i64 :i64]
            :result :i64 :effects #{} :body '(result-error result fallback)}
           {:name 'same? :params ['left 'right] :param-types [:result-i64 :result-i64]
-           :result :i64 :effects #{} :body '(= left right)}]}
+           ;; profile 5: `=` is :bool
+           :result :bool :effects #{} :body '(= left right)}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -748,7 +751,7 @@
                 "if(x['ok?'](ok)!==true||x['ok?'](err)!==false)process.exit(2);"
                 "if(x.value(ok,99n)!==7n||x.value(err,99n)!==99n)process.exit(3);"
                 "if(x.error(err,99n)!==12n||x.error(ok,99n)!==99n)process.exit(4);"
-                "if(x['same?'](ok,[true,7n])!==1n||x['same?'](err,[false,13n])!==0n)process.exit(5);"
+                "if(x['same?'](ok,[true,7n])!==true||x['same?'](err,[false,13n])!==false)process.exit(5);"
                 "for(const bad of [null,undefined,[true],[false],['ok',1n],[true,1]]){try{x['ok?'](bad);process.exit(6)}"
                 "catch(e){if(e.message!=='invalid-result-i64')process.exit(7)}}})")
         result (shell/sh "node" "--input-type=module" "-e" js)]
@@ -1083,7 +1086,8 @@
           {:name 'append :params ['value 'item] :param-types [:vector-i64 :i64]
            :result :vector-i64 :effects #{} :body '(vector-conj value item)}
           {:name 'same? :params ['left 'right] :param-types [:vector-i64 :vector-i64]
-           :result :i64 :effects #{} :body '(= left right)}]}
+           ;; profile 5: `=` is :bool
+           :result :bool :effects #{} :body '(= left right)}]}
         source (script/emit typed-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1094,7 +1098,7 @@
                 "if(x['count-items'](before)!==2n||x.lookup(before,9n)!==99n||x.lookup(before,-1n)!==99n||x.lookup(before,9223372036854775807n)!==99n)process.exit(2);"
                 "if(x['require-item'](before,1n)!==2n||x['drop-items']([1n,2n,3n],1n).join(',')!=='2,3')process.exit(9);"
                 "if(before[0]!==1n||after[0]!==7n||appended.length!==3||!Object.isFrozen(appended))process.exit(3);"
-                "if(x['same?']([1n,2n],[1n,2n])!==1n||x['same?']([1n],[2n])!==0n)process.exit(8);"
+                "if(x['same?']([1n,2n],[1n,2n])!==true||x['same?']([1n],[2n])!==false)process.exit(8);"
                 "for(const bad of [null,[1],[1n,'x']]){try{x['count-items'](bad);process.exit(4)}"
                 "catch(e){if(e.message!=='invalid-vector-i64'&&e.message!=='invalid-i64')process.exit(5)}}"
                 "try{x['count-items'](Array.from({length:16385},()=>0n));process.exit(11)}"
