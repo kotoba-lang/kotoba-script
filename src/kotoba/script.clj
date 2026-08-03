@@ -229,6 +229,14 @@
            :disjoint-set-i64 "assertDisjointSetI64("
            :document "assertDoc("
            "assertI64(") expression ")")))
+
+(defn- closure-dispatcher? [name params]
+  (and (symbol? name)
+       (boolean (re-matches #"__kotoba_invoke(?:_[A-Za-z0-9_-]+)?\$arity[0-4]"
+                            (str name)))
+       (seq params)
+       (str/starts-with? (str (first params)) "__kotoba_closure_")))
+
 (defn- utf8-byte-count
   "Count UTF-8 bytes while rejecting unpaired UTF-16 surrogates. Java's
   default encoder replaces malformed input, so validation must be explicit."
@@ -1716,11 +1724,17 @@
                                param-js-names (mapv #(fresh-js-name counter %) params)
                                env (zipmap params param-js-names)
                                {:keys [param-types result]} (get signatures name)
+                               closure-dispatcher? (closure-dispatcher? name params)
                                guards (apply str
-                                             (map (fn [param-js-name type]
-                                                    (str param-js-name "="
-                                                         (guard-expr type param-js-name) ";"))
-                                                  param-js-names param-types))]
+                                             (map-indexed
+                                              (fn [index [param-js-name type]]
+                                                (str param-js-name "="
+                                                     (if (and closure-dispatcher?
+                                                              (zero? index))
+                                                       (str "assertClosure(" param-js-name ")")
+                                                       (guard-expr type param-js-name))
+                                                     ";"))
+                                              (map vector param-js-names param-types)))]
                            (str "function " (js-name name) "("
                                 (str/join "," param-js-names) "){charge();" guards "return "
                                 (guard-expr result (emit-expr body env functions counter)) ";}")))
@@ -1774,6 +1788,7 @@
              "throw new Error('capability-grant-mismatch');"
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
+             "const assertClosure=v=>{if(!Array.isArray(v)||v.length!==2)throw new Error('invalid-closure');assertI64(v[0]);return v;};"
              "const i32Wrap=v=>BigInt.asIntN(32,assertI64(v));"
              "const u32Wrap=v=>BigInt.asUintN(32,assertI64(v));"
              "const i32Add=(a,b)=>BigInt.asIntN(32,i32Wrap(a)+i32Wrap(b));"
