@@ -1340,6 +1340,15 @@
           :body '(document-edn-read "#{\"one\" 1 :ready}")}
          {:name 'set-has-ready :params [] :param-types [] :result :bool :effects #{}
           :body '(document-set-contains? (parsed-set) (document-keyword :ready))}
+         {:name 'general-map :params [] :param-types [] :result :document :effects #{}
+          :body '(document-edn-read "{[1 2] :pair, \"name\" 7, :ready true}")}
+         {:name 'general-text :params [] :param-types [] :result :string :effects #{}
+          :body '(document-edn-print (general-map))}
+         {:name 'general-name :params [] :param-types [] :result :i64 :effects #{}
+          :body '(option-value-of [:option :i64]
+                   (document-i64-value
+                    (option-value-of [:option :document]
+                      (document-get (general-map) (document-string "name")) (document-null))) -1)}
          {:name 'bad-set-duplicate :params [] :param-types [] :result :document :effects #{}
           :body '(document-edn-read "#{:ready :ready}")}
          {:name 'bad-symbol :params [] :param-types [] :result :string :effects #{}
@@ -1355,10 +1364,11 @@
                      "').then(m=>{const x=m.instantiateKotoba({});"
                      "if(x.printed()!=='{:attempt -7 :goal \"言葉\" :ready true :steps [nil :actor/run]}')process.exit(2);"
                      "if(x.same()!==true)process.exit(3);"
-                     "const c=x.commented();if(c[0]!=='map'||c[1][0][0]!==':a'||c[1][1][0]!==':b')process.exit(4);"
+                     "const c=x.commented();if(c[0]!=='map'||c[1][0][0][1]!==':a'||c[1][1][0][1]!==':b')process.exit(4);"
                      "if(x['symbol-text']()!=='actor/run'||x['parsed-symbol']()[0]!=='symbol')process.exit(5);"
                      "if(x['list-text']()!=='(actor/run 7)'||x['parsed-list']()[0]!=='list')process.exit(6);"
                      "if(x['set-text']()!=='#{1 :ready \"one\"}'||x['parsed-set']()[0]!=='set'||x['set-has-ready']()!==true)process.exit(7);"
+                     "if(x['general-text']()!=='{:ready true \"name\" 7 [1 2] :pair}'||x['general-name']()!==7n)process.exit(9);"
                      "for(const name of ['bad','bad-symbol','bad-set-duplicate']){let denied=false;try{x[name]()}catch(e){denied=true}if(!denied)process.exit(8);}"
                      "}).catch(e=>{console.error(e);process.exit(70)})"))]
     (is (zero? (:exit result)) (str (:err result) (:out result)))
