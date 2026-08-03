@@ -271,7 +271,7 @@
 (defn- typed-signatures [kir]
   (let [typed? (= :kotoba.kir/v4 (:format kir))]
     (into {}
-          (map (fn [{:keys [name params param-types result]}]
+          (map (fn [{:keys [name params param-types result] :as function}]
                  (let [types (if typed? param-types (vec (repeat (count params) :i64)))
                        ;; An untyped (v3) module used to mean "every value is an
                        ;; i64 word", so forcing the result to :i64 was right.
@@ -289,16 +289,27 @@
                        ;; guard rather than correct it.
                        result-type (cond typed?          result
                                          (= :bool result) :bool
-                                         :else            :i64)]
+                                         :else            :i64)
+                       closure-indexes (:closure-param-indexes function)]
                    (when-not (and (symbol? name) (nil? (namespace name))
                                   (vector? params) (vector? types)
                                   (every? #(and (symbol? %) (nil? (namespace %))) params)
                                   (= (count params) (count (distinct params)))
                                   (= (count params) (count types))
                                   (every? #(do (validate-value-type! %) true) types)
-                                  (do (validate-value-type! result-type) true))
+                                  (do (validate-value-type! result-type) true)
+                                  (or (not (contains? function :closure-param-indexes))
+                                      (and typed?
+                                           (vector? closure-indexes)
+                                           (= closure-indexes
+                                              (vec (sort (distinct closure-indexes))))
+                                           (every? #(and (integer? %) (<= 0 %)
+                                                         (< % (count params))
+                                                         (= :i64 (nth types % nil)))
+                                                   closure-indexes))))
                      (fail! "KIR function type signature is invalid" {:function name}))
-                   [name {:params params :param-types types :result result-type}])))
+                   [name {:params params :param-types types :result result-type
+                          :closure-param-indexes (or closure-indexes [])}])))
           (:functions kir))))
 
 (declare infer-type)
@@ -1723,14 +1734,17 @@
                          (let [counter (volatile! 0)
                                param-js-names (mapv #(fresh-js-name counter %) params)
                                env (zipmap params param-js-names)
-                               {:keys [param-types result]} (get signatures name)
+                               {:keys [param-types result closure-param-indexes]}
+                               (get signatures name)
                                closure-dispatcher? (closure-dispatcher? name params)
+                               closure-param-indexes (set closure-param-indexes)
                                guards (apply str
                                              (map-indexed
                                               (fn [index [param-js-name type]]
                                                 (str param-js-name "="
-                                                     (if (and closure-dispatcher?
-                                                              (zero? index))
+                                                     (if (or (contains? closure-param-indexes index)
+                                                             (and closure-dispatcher?
+                                                                  (zero? index)))
                                                        (str "assertClosure(" param-js-name ")")
                                                        (guard-expr type param-js-name))
                                                      ";"))
@@ -1788,7 +1802,7 @@
              "throw new Error('capability-grant-mismatch');"
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
-             "const assertClosure=v=>{if(!Array.isArray(v)||v.length!==2)throw new Error('invalid-closure');assertI64(v[0]);return v;};"
+             "const assertClosure=v=>{if(!Array.isArray(v)||v.length!==2)throw new Error('invalid-closure');assertI64(v[0]);let c=v[1],n=0;while(c!==0n){if(!Array.isArray(c)||c.length!==2||++n>5)throw new Error('invalid-closure-capture-chain');c=c[1];}return v;};"
              "const i32Wrap=v=>BigInt.asIntN(32,assertI64(v));"
              "const u32Wrap=v=>BigInt.asUintN(32,assertI64(v));"
              "const i32Add=(a,b)=>BigInt.asIntN(32,i32Wrap(a)+i32Wrap(b));"
