@@ -15,6 +15,7 @@
 (def ^:private max-keyword-bytes 512)
 (def ^:private max-map-entries 128)
 (def ^:private max-vector-items 16384)
+(def ^:private max-canonical-list-items 16384)
 (def ^:private max-type-depth 8)
 (def ^:private max-type-nodes 64)
 (def ^:private max-variant-cases 32)
@@ -56,6 +57,9 @@
          (validate-value-type! (nth type 2) (inc depth) nodes)
          type)
      (and (vector? type) (= 2 (count type)) (= :option (first type)))
+     (do (validate-value-type! (second type) (inc depth) nodes)
+         type)
+     (and (vector? type) (= 2 (count type)) (= :list (first type)))
      (do (validate-value-type! (second type) (inc depth) nodes)
          type)
      (and (vector? type) (= 2 (count type)) (= :vector (first type)))
@@ -120,6 +124,9 @@
 (defn- generic-option-type? [type]
   (and (vector? type) (= 2 (count type)) (= :option (first type))))
 
+(defn- canonical-list-type? [type]
+  (and (vector? type) (= 2 (count type)) (= :list (first type))))
+
 (defn- heterogeneous-vector-type? [type]
   (and (vector? type) (= 2 (count type)) (= :vector (first type))))
 
@@ -169,7 +176,8 @@
   (if (string? value) (pr-str value) "null"))
 
 (declare validate-value-type! parametric-result-type? variant-type? generic-option-type?
-         heterogeneous-vector-type? typed-set-type? canonical-typed-map-type? record-type?)
+         canonical-list-type? heterogeneous-vector-type? typed-set-type?
+         canonical-typed-map-type? record-type?)
 
 (defn- schema-ref-type?
   [type]
@@ -187,6 +195,8 @@
          (type-js (nth type 2)) "])" )
     (generic-option-type? type)
     (str "Object.freeze(['option'," (type-js (second type)) "])" )
+    (canonical-list-type? type)
+    (str "Object.freeze(['list'," (type-js (second type)) "])" )
     (heterogeneous-vector-type? type)
     (str "Object.freeze(['vector',Object.freeze(["
          (str/join "," (map type-js (second type))) "])])")
@@ -209,7 +219,7 @@
                             (nth type 2))) "])])")))
 (defn- guard-expr [type expression]
   (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
-          (heterogeneous-vector-type? type) (typed-set-type? type)
+          (canonical-list-type? type) (heterogeneous-vector-type? type) (typed-set-type? type)
           (canonical-typed-map-type? type) (record-type? type)
           (schema-ref-type? type))
     (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
@@ -448,7 +458,11 @@
 
       (= op 'vector-count)
       (do (require-arity! op args 1)
-          (require-type! (first types) :vector-i64 (first args)) :i64)
+          (when-not (or (= :vector-i64 (first types))
+                        (canonical-list-type? (first types)))
+            (fail! "vector count requires vector-i64 or canonical list"
+                   {:actual (first types) :node (first args)}))
+          :i64)
 
       (= op 'vector-get)
       (do (require-arity! op args 3)
@@ -1038,6 +1052,17 @@
               (fail! "option match branches have different types"
                      {:none none-type :some some-type :node form}))
             none-type))
+        typed-list-new
+        (let [[type & items] args]
+          (validate-value-type! type)
+          (when-not (canonical-list-type? type)
+            (fail! "typed list constructor requires [:list item-type]" {:type type}))
+          (when (> (count items) max-canonical-list-items)
+            (fail! "typed list constructor exceeds item limit"
+                   {:items (count items) :limit max-canonical-list-items}))
+          (doseq [item items]
+            (require-type! (infer-type item env signatures) (second type) item))
+          type)
         hetero-vector-new
         (let [[type & items] args
               item-types (when (heterogeneous-vector-type? type) (second type))]
@@ -1360,6 +1385,9 @@
         (str "matchGenericOption(" (type-js type) "," (a value) ",()=>" (a none-body) ","
              "(" some-js-name ")=>"
              (emit-expr some-body (assoc env some-name some-js-name) functions counter) ")"))
+      (= op 'typed-list-new)
+      (str "makeTypedList(" (type-js (first args)) ",["
+           (str/join "," (map a (rest args))) "])")
       (= op 'hetero-vector-new)
       (str "makeHeterogeneousVector(" (type-js (first args)) ",["
            (str/join "," (map a (rest args))) "])")
@@ -1431,7 +1459,7 @@
       (str "(recordEqual(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")?1n:0n)")
       (= op 'vector-new) (str "makeVector([" (str/join "," (map a args)) "])")
-      (= op 'vector-count) (str "BigInt(assertVectorI64(" (a (first args)) ").length)")
+      (= op 'vector-count) (str "vectorOrListCount(" (a (first args)) ")")
       (= op 'vector-get) (str "vectorGet(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
                               (a (nth args 2)) ")")
       (= op 'vector-at) (str "vectorAt(" (a (nth args 0)) "," (a (nth args 1)) ")")
@@ -1980,6 +2008,13 @@
              "if(t==='string-index')return assertStringIndex(v);"
              "if(t==='disjoint-set-i64')return assertDisjointSetI64(v);"
              "if(t==='doc')return assertDoc(v);"
+             "if(Array.isArray(t)&&t.length===2&&t[0]==='list'){"
+             "if(!Array.isArray(v)||v.length!==2||!sameType(v[0],t)||!Array.isArray(v[1])||v[1].length>"
+             max-canonical-list-items ")throw new Error('invalid-typed-list');"
+             "s.listItems=(s.listItems||0)+v[1].length;if(s.listItems>" max-canonical-list-items
+             ")throw new Error('typed-list-item-limit');"
+             "const items=v[1].map(x=>assertTypedValue(t[1],x,d+1,s));"
+             "return Object.freeze([t,Object.freeze(items)]);}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='vector'&&Array.isArray(t[1])){"
              "if(t[1].length>" max-heterogeneous-vector-items
              "||!Array.isArray(v)||v.length!==t[1].length+1||!sameType(v[0],t))"
@@ -2045,6 +2080,10 @@
              "const heterogeneousVectorAssoc=(t,v,i,item)=>{v=assertHeterogeneousVector(t,v);"
              "const out=v.slice();out[i+1]=item;return assertHeterogeneousVector(t,out);};"
              "const heterogeneousVectorEqual=(t,a,b)=>sameType(assertHeterogeneousVector(t,a),assertHeterogeneousVector(t,b));"
+             "const assertTypedList=(t,v)=>assertTypedValue(t,v,0,{nodes:0,listItems:0});"
+             "const makeTypedList=(t,items)=>assertTypedList(t,[t,items]);"
+             "const vectorOrListCount=v=>{if(Array.isArray(v)&&v.length===2&&Array.isArray(v[0])&&v[0][0]==='list')"
+             "return BigInt(assertTypedList(v[0],v)[1].length);return BigInt(assertVectorI64(v).length);};"
              "const cmp=(a,b)=>a<b?-1:a>b?1:0;"
              "const compareList=(types,a,b)=>{for(let i=0;i<types.length;i++){const c=compareTyped(types[i],a[i],b[i]);if(c)return c;}return 0;};"
              "const compareTyped=(t,a,b)=>{if(t==='i64'||t==='string'||t==='keyword')return cmp(a,b);"
@@ -2058,6 +2097,8 @@
              "if(Array.isArray(t)&&t[0]==='variant'){const ai=t[2].findIndex(c=>c[0]===a[1]),bi=t[2].findIndex(c=>c[0]===b[1]);"
              "if(ai!==bi)return cmp(ai,bi);return compareTyped(t[2][ai][1],a[2],b[2]);}"
              "if(Array.isArray(t)&&t[0]==='vector')return compareList(t[1],a.slice(1),b.slice(1));"
+             "if(Array.isArray(t)&&t[0]==='list'){const ai=a[1],bi=b[1],n=Math.min(ai.length,bi.length);"
+             "for(let i=0;i<n;i++){const c=compareTyped(t[1],ai[i],bi[i]);if(c)return c;}return cmp(ai.length,bi.length);}"
              "if(Array.isArray(t)&&t[0]==='set'){const ai=a[1],bi=b[1],n=Math.min(ai.length,bi.length);"
              "for(let i=0;i<n;i++){const c=compareTyped(t[1],ai[i],bi[i]);if(c)return c;}return cmp(ai.length,bi.length);}"
              "if(Array.isArray(t)&&t[0]==='map'){const ai=a[1],bi=b[1],n=Math.min(ai.length,bi.length);"
