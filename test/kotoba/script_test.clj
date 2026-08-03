@@ -1332,6 +1332,16 @@
           :body '(document-edn-print (list-value))}
          {:name 'parsed-list :params [] :param-types [] :result :document :effects #{}
           :body '(document-edn-read "(actor/run 7)")}
+         {:name 'set-value :params [] :param-types [] :result :document :effects #{}
+          :body '(document-set (document-string "one") (document-keyword :ready) (document-i64 1))}
+         {:name 'set-text :params [] :param-types [] :result :string :effects #{}
+          :body '(document-edn-print (set-value))}
+         {:name 'parsed-set :params [] :param-types [] :result :document :effects #{}
+          :body '(document-edn-read "#{\"one\" 1 :ready}")}
+         {:name 'set-has-ready :params [] :param-types [] :result :bool :effects #{}
+          :body '(document-set-contains? (parsed-set) (document-keyword :ready))}
+         {:name 'bad-set-duplicate :params [] :param-types [] :result :document :effects #{}
+          :body '(document-edn-read "#{:ready :ready}")}
          {:name 'bad-symbol :params [] :param-types [] :result :string :effects #{}
           :body '(document-edn-print (document-symbol (symbol "nil")))}
          {:name 'bad :params [] :param-types [] :result :document :effects #{}
@@ -1348,7 +1358,8 @@
                      "const c=x.commented();if(c[0]!=='map'||c[1][0][0]!==':a'||c[1][1][0]!==':b')process.exit(4);"
                      "if(x['symbol-text']()!=='actor/run'||x['parsed-symbol']()[0]!=='symbol')process.exit(5);"
                      "if(x['list-text']()!=='(actor/run 7)'||x['parsed-list']()[0]!=='list')process.exit(6);"
-                     "for(const name of ['bad','bad-symbol']){let denied=false;try{x[name]()}catch(e){denied=true}if(!denied)process.exit(7);}"
+                     "if(x['set-text']()!=='#{1 :ready \"one\"}'||x['parsed-set']()[0]!=='set'||x['set-has-ready']()!==true)process.exit(7);"
+                     "for(const name of ['bad','bad-symbol','bad-set-duplicate']){let denied=false;try{x[name]()}catch(e){denied=true}if(!denied)process.exit(8);}"
                      "}).catch(e=>{console.error(e);process.exit(70)})"))]
     (is (zero? (:exit result)) (str (:err result) (:out result)))
     (is (str/includes? source "const docEdnPrint="))
