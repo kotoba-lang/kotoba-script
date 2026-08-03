@@ -1306,6 +1306,38 @@
     (is (str/includes? source "const docSha256="))
     (is (str/includes? source "const docCanonicalBytes="))))
 
+(deftest bounded-document-textual-edn-roundtrips-and-rejects-reader-authority
+  (let [functions
+        [{:name 'value :params [] :param-types [] :result :document :effects #{}
+          :body '(document-map
+                   :goal (document-string "言葉")
+                   :attempt (document-i64 -7)
+                   :ready (document-bool true)
+                   :steps (document-vector (document-null) (document-keyword :actor/run)))}
+         {:name 'printed :params [] :param-types [] :result :string :effects #{}
+          :body '(document-edn-print (value))}
+         {:name 'same :params [] :param-types [] :result :bool :effects #{}
+          :body '(document-equal? (value) (document-edn-read (document-edn-print (value))))}
+         {:name 'commented :params [] :param-types [] :result :document :effects #{}
+          :body '(document-edn-read "; policy\n{:b false, :a 1}")}
+         {:name 'bad :params [] :param-types [] :result :document :effects #{}
+          :body '(document-edn-read "#inst \"2026-08-03\"")}]
+        source (script/emit {:format :kotoba.kir/v4 :entry nil
+                             :exports (mapv :name functions) :effects #{} :functions functions})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (run-node
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "if(x.printed()!=='{:attempt -7 :goal \"言葉\" :ready true :steps [nil :actor/run]}')process.exit(2);"
+                     "if(x.same()!==true)process.exit(3);"
+                     "const c=x.commented();if(c[0]!=='map'||c[1][0][0]!==':a'||c[1][1][0]!==':b')process.exit(4);"
+                     "let denied=false;try{x.bad()}catch(e){denied=true}if(!denied)process.exit(5);"
+                     "}).catch(e=>{console.error(e);process.exit(70)})"))]
+    (is (zero? (:exit result)) (str (:err result) (:out result)))
+    (is (str/includes? source "const docEdnPrint="))
+    (is (str/includes? source "const docEdnRead="))))
+
 (deftest bounded-document-vectors-have-safe-persistent-operations
   (let [functions
         [{:name 'items :params [] :param-types [] :result :document :effects #{}

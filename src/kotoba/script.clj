@@ -536,6 +536,10 @@
       (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :string)
       (= op 'document-read)
       (do (require-arity! op args 1) (require-type! (first types) :string (first args)) :document)
+      (= op 'document-edn-print)
+      (do (require-arity! op args 1) (require-type! (first types) :document (first args)) :string)
+      (= op 'document-edn-read)
+      (do (require-arity! op args 1) (require-type! (first types) :string (first args)) :document)
       (= op 'document-equal?)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :document arg))
@@ -1396,6 +1400,8 @@
       (= op 'document-sha256) (str "docSha256(" (a (first args)) ")")
       (= op 'document-print) (str "docPrint(" (a (first args)) ")")
       (= op 'document-read) (str "docRead(" (a (first args)) ")")
+      (= op 'document-edn-print) (str "docEdnPrint(" (a (first args)) ")")
+      (= op 'document-edn-read) (str "docEdnRead(" (a (first args)) ")")
       (= op 'document-kind) (str "docKind(" (a (first args)) ")")
       (= op 'document-equal?) (str "docEqual(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-at) (str "docVectorAt(" (a (first args)) "," (a (second args)) ")")
@@ -2176,6 +2182,38 @@
              "if(hex.length>65536)throw new Error('document-print-limit');return hex;};"
              "const docRead=s=>{s=assertString(s);if(s.length>65536)throw new Error('document-read-limit');"
              "return docFromCanonicalBytes(hexToBytes(s));};"
+             "const docEdnPrint=v=>{const walk=n=>{n=assertDoc(n);const t=n[0];"
+             "if(t==='null')return 'nil';if(t==='bool')return n[1]?'true':'false';"
+             "if(t==='i64')return String(n[1]);if(t==='f64'){if(!Number.isFinite(n[1]))throw new Error('document-edn-nonfinite');"
+             "const s=String(n[1]);return /[.eE]/.test(s)?s:s+'.0';}if(t==='string')return JSON.stringify(n[1]);"
+             "if(t==='keyword')return n[1];if(t==='vector')return '['+n[1].map(walk).join(' ')+']';"
+             "if(t==='map')return '{'+n[1].map(e=>e[0]+' '+walk(e[1])).join(' ')+'}';"
+             "throw new Error('document-edn-tag');};return assertString(walk(v));};"
+             "const docEdnRead=input=>{const s=assertString(input);let i=0;"
+             "const fail=m=>{throw new Error('document-edn-read-'+m);};"
+             "const ws=c=>c===' '||c==='\\t'||c==='\\n'||c==='\\r'||c===',';"
+             "const skip=()=>{for(;;){while(i<s.length&&ws(s[i]))i++;if(s[i]!==';')return;while(i<s.length&&s[i++]!=='\\n'){} }};"
+             "const delim=c=>c===undefined||ws(c)||'[]{}()\\\";'.includes(c);"
+             "const quoted=()=>{i++;let out='';while(i<s.length){const c=s[i++];if(c==='\\\"')return out;"
+             "if(c==='\\n'||c==='\\r')fail('newline-string');if(c!=='\\\\'){out+=c;continue;}"
+             "if(i>=s.length)fail('truncated-escape');const e=s[i++];const escapes={b:'\\b',t:'\\t',n:'\\n',f:'\\f',r:'\\r','\\\"':'\\\"','\\\\':'\\\\'};"
+             "if(Object.prototype.hasOwnProperty.call(escapes,e)){out+=escapes[e];continue;}if(e!=='u')fail('escape');"
+             "const h=s.slice(i,i+4);if(!/^[0-9A-Fa-f]{4}$/.test(h))fail('unicode');out+=String.fromCharCode(parseInt(h,16));i+=4;}fail('unterminated-string');};"
+             "const token=()=>{const b=i;while(i<s.length&&!delim(s[i]))i++;if(i===b)fail('token');return s.slice(b,i);};"
+             "const value=depth=>{if(depth>" max-document-depth ")fail('depth');skip();const c=s[i];"
+             "if(c===undefined)fail('eof');if(c==='\\\"')return ['string',quoted()];"
+             "if(c==='['){i++;const xs=[];for(;;){skip();if(s[i]===']'){i++;return ['vector',xs];}"
+             "if(xs.length>=" max-document-container-items ")fail('vector-limit');xs.push(value(depth+1));}}"
+             "if(c==='{'){i++;const es=[];for(;;){skip();if(s[i]==='}'){i++;es.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);"
+             "for(let n=1;n<es.length;n++)if(es[n-1][0]===es[n][0])fail('duplicate-key');return ['map',es];}"
+             "if(es.length>=" max-document-container-items ")fail('map-limit');const k=value(depth+1);if(k[0]!=='keyword')fail('map-key');"
+             "skip();if(s[i]==='}')fail('map-value');es.push([k[1],value(depth+1)]);}}"
+             "if(c==='#')fail('dispatch');if(c==='(')fail('list');if(c===')'||c===']'||c==='}')fail('closing');"
+             "const t=token();if(t==='nil')return ['null'];if(t==='true')return ['bool',true];if(t==='false')return ['bool',false];"
+             "if(/^[+-]?[0-9]+$/.test(t)){let n;try{n=BigInt(t);}catch(_){fail('i64');}return ['i64',assertI64(n)];}"
+             "if(/^[+-]?(?:(?:[0-9]+\\.[0-9]*)|(?:[0-9]*\\.[0-9]+)|(?:[0-9]+[eE][+-]?[0-9]+))(?:[eE][+-]?[0-9]+)?$/.test(t)){const n=Number(t);if(!Number.isFinite(n))fail('f64');return ['f64',n];}"
+             "if(t.length>1&&t[0]===':')return ['keyword',assertKeyword(t)];fail('unsupported-token');};"
+             "skip();const doc=value(0);skip();if(i!==s.length)fail('trailing');return assertDoc(doc);};"
              "const docEqual=(a,b)=>{a=assertDoc(a);b=assertDoc(b);const eq=(x,y)=>{if(x[0]!==y[0])return false;const t=x[0];if(t==='null')return true;if(t!=='vector'&&t!=='map')return x[1]===y[1];if(x[1].length!==y[1].length)return false;if(t==='vector'){for(let i=0;i<x[1].length;i++)if(!eq(x[1][i],y[1][i]))return false;return true;}for(let i=0;i<x[1].length;i++)if(x[1][i][0]!==y[1][i][0]||!eq(x[1][i][1],y[1][i][1]))return false;return true;};return eq(a,b);};"
              "const docVectorAt=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);const ok=index>=0n&&index<BigInt(items.length);return makeGenericOption(docType,ok,ok?items[Number(index)]:undefined);};"
              "const docMapEntryAt=(v,index)=>{const items=docMapEntries(v);index=assertI64(index);"
