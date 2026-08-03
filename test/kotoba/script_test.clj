@@ -106,6 +106,43 @@
                             "k$__kotoba_closure_string_1$1=assertI64(k$__kotoba_closure_string_1$1);")))
     (is (= source (script/emit closure-kir)))))
 
+(deftest closure-parameter-refinements-guard-nondispatcher-functions
+  (let [closure-kir
+        {:format :kotoba.kir/v4 :entry 'main :exports ['main 'consume] :effects #{}
+         :functions
+         [{:name 'main :params [] :param-types [] :result :i64 :effects #{}
+           :body '(let [f (pair 7 0)] (consume f))}
+          {:name 'consume :params ['f] :param-types [:i64]
+           :closure-param-indexes [0]
+           :result :i64 :effects #{} :body '(pair-first f)}]}
+        source (script/emit closure-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.main()!==7n)process.exit(2);"
+                "try{x.consume(Object.freeze([7n,9n]));process.exit(3)}catch(e){"
+                "if(e.message!=='invalid-closure-capture-chain')process.exit(4)}})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "k$f$1=assertClosure(k$f$1);"))
+    (is (not (str/includes? source "k$f$1=assertI64(k$f$1);")))))
+
+(deftest malformed-closure-parameter-refinements-are-rejected
+  (let [base {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
+              :functions [{:name 'main :params ['value] :param-types [:i64]
+                           :closure-param-indexes [0]
+                           :result :i64 :effects #{} :body 'value}]}]
+    (doseq [indexes [[1] [0 0] [0 -1] ["0"]]]
+      (testing (pr-str indexes)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"KIR function type signature is invalid"
+             (script/emit (assoc-in base [:functions 0 :closure-param-indexes]
+                                    indexes))))))
+    (testing "metadata is typed-KIR-only"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"KIR function type signature is invalid"
+           (script/emit (assoc base :format :kotoba.kir/v3)))))))
+
 (deftest ambient-access-guard-catches-real-reach-out
   (testing "the guard fires on each ambient access form"
     (doseq [leak ["const g=globalThis;" "const d=window.location;"
