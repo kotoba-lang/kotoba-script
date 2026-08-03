@@ -78,6 +78,34 @@
     (is (str/includes? source "void (quot(1n,0n));return 5n;"))
     (is (= source (script/emit do-kir)))))
 
+(deftest compiler-closure-dispatchers-guard-the-physical-pair-handle
+  (let [closure-kir
+        {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
+         :functions
+         [{:name 'main :params [] :param-types [] :result :string :effects #{}
+           :body '(let [f (pair 1 0)]
+                    (do 0 (__kotoba_invoke_string$arity1 f 123)))}
+          {:name '__kotoba_lambda_1_arity1 :params ['x] :param-types [:i64]
+           :result :string :effects #{} :body "done"}
+          {:name '__kotoba_invoke_string$arity1
+           :params ['__kotoba_closure_string_1 '__kotoba_invoke_arg_0]
+           :param-types [:i64 :i64] :result :string :effects #{}
+           :body '(if (= (pair-first __kotoba_closure_string_1) 1)
+                    (__kotoba_lambda_1_arity1 __kotoba_invoke_arg_0)
+                    (if (= (quot 1 0) 0) "" ""))}]}
+        source (script/emit closure-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.main()!=='done')process.exit(2)})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source
+                       "k$__kotoba_closure_string_1$1=assertClosure(k$__kotoba_closure_string_1$1);"))
+    (is (not (str/includes? source
+                            "k$__kotoba_closure_string_1$1=assertI64(k$__kotoba_closure_string_1$1);")))
+    (is (= source (script/emit closure-kir)))))
+
 (deftest ambient-access-guard-catches-real-reach-out
   (testing "the guard fires on each ambient access form"
     (doseq [leak ["const g=globalThis;" "const d=window.location;"
