@@ -638,6 +638,16 @@
     (is (not (re-find #"1n = 2n" source)))
     (is (re-find #"capability-grant-mismatch" source))))
 
+(deftest equality-between-pair-values-and-scalars-is-false
+  (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main :effects #{}
+                             :functions [{:name 'main :params []
+                                          :body '(if (= (pair 1 0) 0) 1 2)}]})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{if(m.instantiateKotoba({}).main()!==2n)process.exit(2)})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))))
+
 (deftest explicit-exports-hide-internal-functions
   (let [source (script/emit (assoc kir :exports ['main]))
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
