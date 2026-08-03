@@ -291,6 +291,7 @@
                                          (= :bool result) :bool
                                          :else            :i64)
                        closure-indexes (:closure-param-indexes function)
+                       pair-chain-indexes (:i64-pair-chain-param-indexes function)
                        closure-result? (:closure-result? function)
                        closure-indexes-valid?
                        (or (not (contains? function :closure-param-indexes))
@@ -302,6 +303,17 @@
                                               (< % (count params))
                                               (= :i64 (nth types % nil)))
                                         closure-indexes)))
+                       pair-chain-indexes-valid?
+                       (or (not (contains? function :i64-pair-chain-param-indexes))
+                           (and typed?
+                                (vector? pair-chain-indexes)
+                                (= pair-chain-indexes
+                                   (vec (sort (distinct pair-chain-indexes))))
+                                (not-any? (set closure-indexes) pair-chain-indexes)
+                                (every? #(and (integer? %) (<= 0 %)
+                                              (< % (count params))
+                                              (= :i64 (nth types % nil)))
+                                        pair-chain-indexes)))
                        closure-result-valid?
                        (or (not (contains? function :closure-result?))
                            (and typed? (true? closure-result?)
@@ -314,10 +326,12 @@
                                   (every? #(do (validate-value-type! %) true) types)
                                   (do (validate-value-type! result-type) true)
                                   closure-indexes-valid?
+                                  pair-chain-indexes-valid?
                                   closure-result-valid?)
                      (fail! "KIR function type signature is invalid" {:function name}))
                    [name {:params params :param-types types :result result-type
                           :closure-param-indexes (or closure-indexes [])
+                          :i64-pair-chain-param-indexes (or pair-chain-indexes [])
                           :closure-result? (true? closure-result?)}])))
           (:functions kir))))
 
@@ -1743,10 +1757,13 @@
                          (let [counter (volatile! 0)
                                param-js-names (mapv #(fresh-js-name counter %) params)
                                env (zipmap params param-js-names)
-                               {:keys [param-types result closure-param-indexes closure-result?]}
+                               {:keys [param-types result closure-param-indexes
+                                       i64-pair-chain-param-indexes closure-result?]}
                                (get signatures name)
                                closure-dispatcher? (closure-dispatcher? name params)
                                closure-param-indexes (set closure-param-indexes)
+                               i64-pair-chain-param-indexes
+                               (set i64-pair-chain-param-indexes)
                                guards (apply str
                                              (map-indexed
                                               (fn [index [param-js-name type]]
@@ -1755,7 +1772,11 @@
                                                              (and closure-dispatcher?
                                                                   (zero? index)))
                                                        (str "assertClosure(" param-js-name ")")
-                                                       (guard-expr type param-js-name))
+                                                       (if (contains? i64-pair-chain-param-indexes
+                                                                      index)
+                                                         (str "assertI64PairChain("
+                                                              param-js-name ")")
+                                                         (guard-expr type param-js-name)))
                                                      ";"))
                                               (map vector param-js-names param-types)))]
                            (str "function " (js-name name) "("
@@ -1817,6 +1838,7 @@
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
              "const assertClosure=v=>{if(!Array.isArray(v)||v.length!==2)throw new Error('invalid-closure');assertI64(v[0]);let c=v[1],n=0;while(c!==0n){if(!Array.isArray(c)||c.length!==2||++n>5)throw new Error('invalid-closure-capture-chain');c=c[1];}return v;};"
+             "const assertI64PairChain=v=>{let c=v,n=0;while(c!==0n){if(!Array.isArray(c)||c.length!==2)throw new Error('invalid-i64-pair-chain');if(++n>4)throw new Error('i64-pair-chain-limit');assertI64(c[0]);c=c[1];}return v;};"
              "const i32Wrap=v=>BigInt.asIntN(32,assertI64(v));"
              "const u32Wrap=v=>BigInt.asUintN(32,assertI64(v));"
              "const i32Add=(a,b)=>BigInt.asIntN(32,i32Wrap(a)+i32Wrap(b));"
