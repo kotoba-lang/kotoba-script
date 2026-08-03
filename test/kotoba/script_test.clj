@@ -1187,6 +1187,28 @@
                            (assoc-in kir [:functions 0 :body]
                                      (list 'typed-set-new type "wrong")))))))
 
+(deftest canonical-lists-construct-count-and-validate-items
+  (let [type [:list :i64]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['make 'count-items] :effects #{}
+             :functions
+             [{:name 'make :params [] :param-types [] :result type :effects #{}
+               :body (list 'typed-list-new type 4 5 6)}
+              {:name 'count-items :params ['value] :param-types [type]
+               :result :i64 :effects #{} :body '(vector-count value)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),v=x.make();"
+                "if(x['count-items'](v)!==3n||v[1].join(',')!=='4,5,6'||!Object.isFrozen(v[1]))process.exit(2);"
+                "try{x['count-items']([Object.freeze(['list','i64']),[1n,'bad']]);process.exit(3)}"
+                "catch(e){if(e.message!=='invalid-i64')process.exit(4)}})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"expression type mismatch"
+                          (script/emit
+                           (assoc-in kir [:functions 0 :body]
+                                     (list 'typed-list-new type "wrong")))))))
+
 (deftest bounded-records-seal-schema-field-order-and-persistent-updates
   (let [type [:record :demo/person [[:name :string] [:age :i64]
                                      [:nickname [:option :string]]]]
