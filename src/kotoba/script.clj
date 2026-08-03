@@ -533,7 +533,9 @@
             (fail! "KIR document map requires key/value pairs" {:node args}))
           (doseq [[[key-form value-form] [key-type value-type]]
                   (map vector (partition 2 args) (partition 2 types))]
-            (require-type! key-type :keyword key-form)
+            (when-not (contains? #{:keyword :document} key-type)
+              (fail! "KIR document map key must be keyword or document"
+                     {:form key-form :actual key-type}))
             (require-type! value-type :document value-form))
           (when (> (quot (count args) 2) max-document-container-items)
             (fail! "KIR document map exceeds entry limit" {:entries (quot (count args) 2)}))
@@ -592,20 +594,24 @@
       (= op 'document-contains)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
-          (require-type! (nth types 1) :keyword (nth args 1)) :bool)
+          (when-not (contains? #{:keyword :document} (nth types 1))
+            (fail! "document map key must be keyword or document" {:form (nth args 1)})) :bool)
       (= op 'document-get)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
-          (require-type! (nth types 1) :keyword (nth args 1)) [:option :document])
+          (when-not (contains? #{:keyword :document} (nth types 1))
+            (fail! "document map key must be keyword or document" {:form (nth args 1)})) [:option :document])
       (= op 'document-assoc)
       (do (require-arity! op args 3)
           (require-type! (nth types 0) :document (nth args 0))
-          (require-type! (nth types 1) :keyword (nth args 1))
+          (when-not (contains? #{:keyword :document} (nth types 1))
+            (fail! "document map key must be keyword or document" {:form (nth args 1)}))
           (require-type! (nth types 2) :document (nth args 2)) :document)
       (= op 'document-dissoc)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
-          (require-type! (nth types 1) :keyword (nth args 1)) :document)
+          (when-not (contains? #{:keyword :document} (nth types 1))
+            (fail! "document map key must be keyword or document" {:form (nth args 1)})) :document)
       (= op 'document-merge)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :document arg))
@@ -2156,8 +2162,8 @@
              ")throw new Error('invalid-doc-map');let previous=null;const entries=x[1].map(e=>{"
              "if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-doc-entry');"
              "if(state.seen.has(e))throw new Error('doc-shared-or-cyclic');state.seen.add(e);"
-             "const key=assertKeyword(e[0]);state.bytes+=utf8Bytes(key);if(state.bytes>" max-document-utf8-bytes
-             ")throw new Error('doc-utf8-limit');if(previous!==null&&previous>=key)throw new Error('noncanonical-doc-map');"
+             "const key=typeof e[0]==='string'?walk(['keyword',assertKeyword(e[0])],d+1):walk(e[0],d+1);"
+             "if(previous!==null&&docMapKeyCompare(previous,key)>=0)throw new Error('noncanonical-doc-map');"
              "previous=key;return Object.freeze([key,walk(e[1],d+1)]);});return Object.freeze([tag,Object.freeze(entries)]);}"
              "throw new Error('unknown-doc-tag');};return walk(v,0);};"
              "const makeDocScalar=(tag,value)=>assertDoc([tag,value]);"
@@ -2169,8 +2175,8 @@
              "return assertDoc(['set',sorted]);};"
              "const makeDocMap=entries=>{if(!Array.isArray(entries)||entries.length>" max-document-container-items
              ")throw new Error('invalid-doc-map');const sorted=entries.map(e=>{if(!Array.isArray(e)||e.length!==2)"
-             "throw new Error('invalid-doc-entry');return [assertKeyword(e[0]),e[1]];}).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);"
-             "for(let i=1;i<sorted.length;i++)if(sorted[i-1][0]===sorted[i][0])throw new Error('duplicate-doc-key');"
+             "throw new Error('invalid-doc-entry');return [typeof e[0]==='string'?makeDocScalar('keyword',e[0]):assertDoc(e[0]),e[1]];}).sort((a,b)=>docMapKeyCompare(a[0],b[0]));"
+             "for(let i=1;i<sorted.length;i++)if(docMapKeyCompare(sorted[i-1][0],sorted[i][0])===0)throw new Error('duplicate-doc-key');"
              "return assertDoc(['map',sorted.map(e=>[e[0],assertDoc(e[1])])]);};"
              "const docMapEntries=v=>{v=assertDoc(v);if(v[0]!=='map')throw new Error('doc-map-required');return v[1];};"
              "const docVectorEntries=v=>{v=assertDoc(v);if(v[0]!=='vector')throw new Error('doc-vector-required');return v[1];};"
@@ -2179,8 +2185,9 @@
              "const docCount=v=>{v=assertDoc(v);if(v[0]!=='map'&&v[0]!=='vector'&&v[0]!=='list'&&v[0]!=='set')throw new Error('doc-container-required');return BigInt(v[1].length);};"
              "const docKind=v=>assertKeyword(':'+assertDoc(v)[0]);"
              "const sha256Hex=bytes=>{const K=new Uint32Array([1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1955562222,2024104815,2227730452,2361852424,2428436474,2756734187,3204031479,3329325298]);let h0=1779033703,h1=3144134277,h2=1013904242,h3=2773480762,h4=1359893119,h5=2600822924,h6=528734635,h7=1541459225;const l=bytes.length;const bitLen=l*8;const withOne=new Uint8Array(((l+9+63)&~63));withOne.set(bytes);withOne[l]=0x80;const dv=new DataView(withOne.buffer);dv.setUint32(withOne.length-4,bitLen>>>0,false);dv.setUint32(withOne.length-8,Math.floor(bitLen/0x100000000),false);const rotr=(x,n)=>((x>>>n)|(x<<(32-n)))>>>0;const w=new Uint32Array(64);for(let i=0;i<withOne.length;i+=64){for(let j=0;j<16;j++)w[j]=dv.getUint32(i+j*4,false);for(let j=16;j<64;j++){const s0=rotr(w[j-15],7)^rotr(w[j-15],18)^(w[j-15]>>>3);const s1=rotr(w[j-2],17)^rotr(w[j-2],19)^(w[j-2]>>>10);w[j]=(w[j-16]+s0+w[j-7]+s1)>>>0;}let a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;for(let j=0;j<64;j++){const S1=rotr(e,6)^rotr(e,11)^rotr(e,25);const ch=(e&f)^((~e)&g);const t1=(h+S1+ch+K[j]+w[j])>>>0;const S0=rotr(a,2)^rotr(a,13)^rotr(a,22);const maj=(a&b)^(a&c)^(b&c);const t2=(S0+maj)>>>0;h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;}h0=(h0+a)>>>0;h1=(h1+b)>>>0;h2=(h2+c)>>>0;h3=(h3+d)>>>0;h4=(h4+e)>>>0;h5=(h5+f)>>>0;h6=(h6+g)>>>0;h7=(h7+h)>>>0;}const out=new Uint8Array(32);const ov=new DataView(out.buffer);[h0,h1,h2,h3,h4,h5,h6,h7].forEach((x,i)=>ov.setUint32(i*4,x,false));return Array.from(out).map(b=>b.toString(16).padStart(2,'0')).join('');};"
-             "const docCanonicalBytes=node=>{const out=[];const enc=new TextEncoder();const emit=n=>out.push(n&255);const emitStr=s=>{const b=enc.encode(s);for(const x of b)emit(x);};const emitLenStr=s=>{const b=enc.encode(s);emitStr(String(b.length));emit(58);for(const x of b)emit(x);};const walk=n=>{n=assertDoc(n);const t=n[0];if(t==='null'){emit(110);return;}if(t==='bool'){emit(98);emit(n[1]?116:102);return;}if(t==='i64'){emit(105);emitStr(String(n[1]));emit(59);return;}if(t==='f64'){const v=Object.is(n[1],-0)?0:n[1];const buf=new ArrayBuffer(8);const dv=new DataView(buf);dv.setFloat64(0,v,true);emit(102);emitStr(String(dv.getBigInt64(0,true)));emit(59);return;}if(t==='string'){emit(115);emitLenStr(n[1]);return;}if(t==='keyword'){emit(107);emitLenStr(String(n[1]));return;}if(t==='symbol'){emit(121);emitLenStr(String(n[1]));return;}if(t==='vector'||t==='list'||t==='set'){emit(t==='vector'?118:t==='list'?108:101);emitStr(String(n[1].length));emit(58);for(const it of n[1])walk(it);return;}if(t==='map'){emit(109);emitStr(String(n[1].length));emit(58);for(const e of n[1]){emit(75);emitLenStr(String(e[0]));walk(e[1]);}return;}throw new Error('unknown-doc-tag');};walk(node);return new Uint8Array(out);};"
+             "const docCanonicalBytes=node=>{const out=[];const enc=new TextEncoder();const emit=n=>out.push(n&255);const emitStr=s=>{const b=enc.encode(s);for(const x of b)emit(x);};const emitLenStr=s=>{const b=enc.encode(s);emitStr(String(b.length));emit(58);for(const x of b)emit(x);};const walk=n=>{n=assertDoc(n);const t=n[0];if(t==='null'){emit(110);return;}if(t==='bool'){emit(98);emit(n[1]?116:102);return;}if(t==='i64'){emit(105);emitStr(String(n[1]));emit(59);return;}if(t==='f64'){const v=Object.is(n[1],-0)?0:n[1];const buf=new ArrayBuffer(8);const dv=new DataView(buf);dv.setFloat64(0,v,true);emit(102);emitStr(String(dv.getBigInt64(0,true)));emit(59);return;}if(t==='string'){emit(115);emitLenStr(n[1]);return;}if(t==='keyword'){emit(107);emitLenStr(String(n[1]));return;}if(t==='symbol'){emit(121);emitLenStr(String(n[1]));return;}if(t==='vector'||t==='list'||t==='set'){emit(t==='vector'?118:t==='list'?108:101);emitStr(String(n[1].length));emit(58);for(const it of n[1])walk(it);return;}if(t==='map'){emit(109);emitStr(String(n[1].length));emit(58);for(const e of n[1]){if(e[0][0]==='keyword'){emit(75);emitLenStr(String(e[0][1]));}else{emit(68);walk(e[0]);}walk(e[1]);}return;}throw new Error('unknown-doc-tag');};walk(node);return new Uint8Array(out);};"
              "const docCompare=(left,right)=>{const a=docCanonicalBytes(left),b=docCanonicalBytes(right),n=Math.min(a.length,b.length);for(let i=0;i<n;i++){if(a[i]<b[i])return -1;if(a[i]>b[i])return 1;}return a.length<b.length?-1:a.length>b.length?1:0;};"
+             "const docMapKeyCompare=(a,b)=>a[0]==='keyword'&&b[0]==='keyword'?(a[1]<b[1]?-1:a[1]>b[1]?1:0):docCompare(a,b);"
              "const docSha256=v=>sha256Hex(docCanonicalBytes(assertDoc(v)));"
              "const bytesToHex=bytes=>Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join('');"
              "const hexToBytes=s=>{if(typeof s!=='string')throw new Error('document-read-string');"
@@ -2218,9 +2225,8 @@
              "if(tag===101){const n=Number(takeUntil(58));if(!Number.isInteger(n)||n<0||n>32)throw new Error('document-read-ec');"
              "const items=[];for(let k=0;k<n;k++)items.push(walk());return Object.freeze(['set',Object.freeze(items)]);}"
              "if(tag===109){const n=Number(takeUntil(58));if(!Number.isInteger(n)||n<0||n>32)throw new Error('document-read-mc');"
-             "const entries=[];for(let k=0;k<n;k++){if(take()!==75)throw new Error('document-read-K');"
-             "const ks=takeLenStr();if(!ks.startsWith(':'))throw new Error('document-read-mapkw');"
-             "entries.push(Object.freeze([ks,walk()]));}"
+             "const entries=[];for(let k=0;k<n;k++){const marker=take();let key;if(marker===75){const ks=takeLenStr();if(!ks.startsWith(':'))throw new Error('document-read-mapkw');key=Object.freeze(['keyword',ks]);}else if(marker===68)key=walk();else throw new Error('document-read-map-key-marker');"
+             "entries.push(Object.freeze([key,walk()]));}"
              "return Object.freeze(['map',Object.freeze(entries)]);}"
              "throw new Error('document-read-tag');};"
              "const doc=walk();if(i!==len)throw new Error('document-read-trailing');return assertDoc(doc);};"
@@ -2236,7 +2242,7 @@
              "const s=String(n[1]);return /[.eE]/.test(s)?s:s+'.0';}if(t==='string')return JSON.stringify(n[1]);"
              "if(t==='keyword')return n[1];if(t==='symbol')return docEdnSymbol(n[1]);if(t==='vector')return '['+n[1].map(walk).join(' ')+']';if(t==='list')return '('+n[1].map(walk).join(' ')+')';"
              "if(t==='set')return '#{'+n[1].map(walk).join(' ')+'}';"
-             "if(t==='map')return '{'+n[1].map(e=>e[0]+' '+walk(e[1])).join(' ')+'}';"
+             "if(t==='map')return '{'+n[1].map(e=>walk(e[0])+' '+walk(e[1])).join(' ')+'}';"
              "throw new Error('document-edn-tag');};return assertString(walk(v));};"
              "const docEdnRead=input=>{const s=assertString(input);let i=0;"
              "const fail=m=>{throw new Error('document-edn-read-'+m);};"
@@ -2255,10 +2261,10 @@
              "if(xs.length>=" max-document-container-items ")fail('vector-limit');xs.push(value(depth+1));}}"
              "if(c==='('){i++;const xs=[];for(;;){skip();if(s[i]===')'){i++;return ['list',xs];}"
              "if(xs.length>=" max-document-container-items ")fail('list-limit');xs.push(value(depth+1));}}"
-             "if(c==='{'){i++;const es=[];for(;;){skip();if(s[i]==='}'){i++;es.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);"
-             "for(let n=1;n<es.length;n++)if(es[n-1][0]===es[n][0])fail('duplicate-key');return ['map',es];}"
-             "if(es.length>=" max-document-container-items ")fail('map-limit');const k=value(depth+1);if(k[0]!=='keyword')fail('map-key');"
-             "skip();if(s[i]==='}')fail('map-value');es.push([k[1],value(depth+1)]);}}"
+             "if(c==='{'){i++;const es=[];for(;;){skip();if(s[i]==='}'){i++;es.sort((a,b)=>docMapKeyCompare(a[0],b[0]));"
+             "for(let n=1;n<es.length;n++)if(docMapKeyCompare(es[n-1][0],es[n][0])===0)fail('duplicate-key');return ['map',es];}"
+             "if(es.length>=" max-document-container-items ")fail('map-limit');const k=value(depth+1);"
+             "skip();if(s[i]==='}')fail('map-value');es.push([k,value(depth+1)]);}}"
              "if(c==='#'){i++;if(s[i]!=='{')fail('dispatch');i++;const xs=[];for(;;){skip();if(s[i]==='}'){i++;xs.sort(docCompare);for(let n=1;n<xs.length;n++)if(docCompare(xs[n-1],xs[n])===0)fail('duplicate-set-item');return ['set',xs];}if(xs.length>=" max-document-container-items ")fail('set-limit');xs.push(value(depth+1));}}"
              "if(c===')'||c===']'||c==='}')fail('closing');"
              "const t=token();if(t==='nil')return ['null'];if(t==='true')return ['bool',true];if(t==='false')return ['bool',false];"
@@ -2266,25 +2272,25 @@
              "if(/^[+-]?(?:(?:[0-9]+\\.[0-9]*)|(?:[0-9]*\\.[0-9]+)|(?:[0-9]+[eE][+-]?[0-9]+))(?:[eE][+-]?[0-9]+)?$/.test(t)){const n=Number(t);if(!Number.isFinite(n))fail('f64');return ['f64',n];}"
              "if(t.length>1&&t[0]===':')return ['keyword',assertKeyword(t)];if(t[0]===':')fail('keyword');return ['symbol',assertSymbol(t)];};"
              "skip();const doc=value(0);skip();if(i!==s.length)fail('trailing');return assertDoc(doc);};"
-             "const docEqual=(a,b)=>{a=assertDoc(a);b=assertDoc(b);const eq=(x,y)=>{if(x[0]!==y[0])return false;const t=x[0];if(t==='null')return true;if(t!=='vector'&&t!=='list'&&t!=='set'&&t!=='map')return x[1]===y[1];if(x[1].length!==y[1].length)return false;if(t==='vector'||t==='list'||t==='set'){for(let i=0;i<x[1].length;i++)if(!eq(x[1][i],y[1][i]))return false;return true;}for(let i=0;i<x[1].length;i++)if(x[1][i][0]!==y[1][i][0]||!eq(x[1][i][1],y[1][i][1]))return false;return true;};return eq(a,b);};"
+             "const docEqual=(a,b)=>{a=assertDoc(a);b=assertDoc(b);const eq=(x,y)=>{if(x[0]!==y[0])return false;const t=x[0];if(t==='null')return true;if(t!=='vector'&&t!=='list'&&t!=='set'&&t!=='map')return x[1]===y[1];if(x[1].length!==y[1].length)return false;if(t==='vector'||t==='list'||t==='set'){for(let i=0;i<x[1].length;i++)if(!eq(x[1][i],y[1][i]))return false;return true;}for(let i=0;i<x[1].length;i++)if(!eq(x[1][i][0],y[1][i][0])||!eq(x[1][i][1],y[1][i][1]))return false;return true;};return eq(a,b);};"
              "const docSetContains=(v,item)=>{const items=docSetEntries(v);item=assertDoc(item);return items.some(candidate=>docCompare(candidate,item)===0);};"
              "const docVectorAt=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);const ok=index>=0n&&index<BigInt(items.length);return makeGenericOption(docType,ok,ok?items[Number(index)]:undefined);};"
              "const docListAt=(v,index)=>{const items=docListEntries(v);index=assertI64(index);const ok=index>=0n&&index<BigInt(items.length);return makeGenericOption(docType,ok,ok?items[Number(index)]:undefined);};"
              "const docMapEntryAt=(v,index)=>{const items=docMapEntries(v);index=assertI64(index);"
              "const ok=index>=0n&&index<BigInt(items.length);const entry=ok?items[Number(index)]:null;"
-             "return makeGenericOption(docType,ok,ok?makeDocVector([makeDocScalar('keyword',entry[0]),entry[1]]):undefined);};"
+             "return makeGenericOption(docType,ok,ok?makeDocVector([entry[0],entry[1]]):undefined);};"
              "const docVectorAssoc=(v,index,item)=>{const items=docVectorEntries(v);index=assertI64(index);item=assertDoc(item);if(index<0n||index>=BigInt(items.length))throw new Error('doc-vector-index-out-of-range');const out=[...items];out[Number(index)]=item;return makeDocVector(out);};"
              "const docVectorConj=(v,item)=>{const items=docVectorEntries(v);item=assertDoc(item);if(items.length>=32)throw new Error('doc-vector-too-large');return makeDocVector([...items,item]);};"
              "const docVectorDrop=(v,count)=>{const items=docVectorEntries(v);count=assertI64(count);if(count<0n||count>BigInt(items.length))throw new Error('doc-vector-drop-out-of-range');return makeDocVector(items.slice(Number(count)));};"
              "const docVectorRemove=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);if(index<0n||index>=BigInt(items.length))throw new Error('doc-vector-index-out-of-range');return makeDocVector(items.filter((_,i)=>i!==Number(index)));};"
-             "const docPosition=(v,key)=>{const entries=docMapEntries(v);key=assertKeyword(key);return [entries,key,entries.findIndex(e=>e[0]===key)];};"
+             "const docPosition=(v,key)=>{const entries=docMapEntries(v);key=typeof key==='string'?makeDocScalar('keyword',key):assertDoc(key);return [entries,key,entries.findIndex(e=>docMapKeyCompare(e[0],key)===0)];};"
              "const docContains=(v,key)=>docPosition(v,key)[2]>=0;"
              "const docGet=(v,key)=>{const [entries,k,i]=docPosition(v,key);return makeGenericOption(docType,i>=0,i>=0?entries[i][1]:undefined);};"
              "const docAssoc=(v,key,item)=>{const [entries,k,i]=docPosition(v,key);item=assertDoc(item);"
              "if(i<0&&entries.length>=" max-document-container-items ")throw new Error('doc-map-too-large');"
              "const out=entries.map(e=>[e[0],e[1]]);if(i<0)out.push([k,item]);else out[i]=[k,item];return makeDocMap(out);};"
              "const docDissoc=(v,key)=>{const [entries,k,i]=docPosition(v,key);return i<0?assertDoc(v):makeDocMap(entries.filter((e,n)=>n!==i));};"
-             "const docMerge=(a,b)=>{let out=docMapEntries(a).map(e=>[e[0],e[1]]);for(const e of docMapEntries(b)){const i=out.findIndex(x=>x[0]===e[0]);if(i<0)out.push([e[0],e[1]]);else out[i]=[e[0],e[1]];}return makeDocMap(out);};"
+             "const docMerge=(a,b)=>{let out=docMapEntries(a).map(e=>[e[0],e[1]]);for(const e of docMapEntries(b)){const i=out.findIndex(x=>docMapKeyCompare(x[0],e[0])===0);if(i<0)out.push([e[0],e[1]]);else out[i]=[e[0],e[1]];}return makeDocMap(out);};"
              "const docScalarOption=(tag,v)=>{v=assertDoc(v);const t=Object.freeze(['option',tag]);return makeGenericOption(t,v[0]===tag,v[0]===tag?v[1]:undefined);};"
              "const xmlName=/^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/u;"
              "const xmlWs=c=>c===' '||c==='\\t'||c==='\\n'||c==='\\r';"
