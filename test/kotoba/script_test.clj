@@ -1320,6 +1320,12 @@
           :body '(document-equal? (value) (document-edn-read (document-edn-print (value))))}
          {:name 'commented :params [] :param-types [] :result :document :effects #{}
           :body '(document-edn-read "; policy\n{:b false, :a 1}")}
+         {:name 'symbol-value :params [] :param-types [] :result :document :effects #{}
+          :body '(document-symbol (symbol "actor/run"))}
+         {:name 'symbol-text :params [] :param-types [] :result :string :effects #{}
+          :body '(document-edn-print (symbol-value))}
+         {:name 'parsed-symbol :params [] :param-types [] :result :document :effects #{}
+          :body '(document-edn-read "actor/run")}
          {:name 'bad :params [] :param-types [] :result :document :effects #{}
           :body '(document-edn-read "#inst \"2026-08-03\"")}]
         source (script/emit {:format :kotoba.kir/v4 :entry nil
@@ -1332,7 +1338,8 @@
                      "if(x.printed()!=='{:attempt -7 :goal \"言葉\" :ready true :steps [nil :actor/run]}')process.exit(2);"
                      "if(x.same()!==true)process.exit(3);"
                      "const c=x.commented();if(c[0]!=='map'||c[1][0][0]!==':a'||c[1][1][0]!==':b')process.exit(4);"
-                     "let denied=false;try{x.bad()}catch(e){denied=true}if(!denied)process.exit(5);"
+                     "if(x['symbol-text']()!=='actor/run'||x['parsed-symbol']()[0]!=='symbol')process.exit(5);"
+                     "let denied=false;try{x.bad()}catch(e){denied=true}if(!denied)process.exit(6);"
                      "}).catch(e=>{console.error(e);process.exit(70)})"))]
     (is (zero? (:exit result)) (str (:err result) (:out result)))
     (is (str/includes? source "const docEdnPrint="))
