@@ -1582,6 +1582,14 @@
                    ";return (typeof t==='boolean'?t:t!==0n)?"
                    (emit-expr then env functions counter) ":"
                    (emit-expr else env functions counter) ";})()"))
+         do (do
+              (when (empty? args)
+                (fail! "KIR do requires a value" {:node form}))
+              (str "(()=>{"
+                   (apply str
+                          (map #(str "void (" (emit-expr % env functions counter) ");")
+                               (butlast args)))
+                   "return " (emit-expr (last args) env functions counter) ";})()"))
          (emit-call op args env functions counter)))
      :else (fail! "unsupported KIR node" {:node form}))))
 
