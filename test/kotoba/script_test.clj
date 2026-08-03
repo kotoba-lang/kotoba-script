@@ -1326,6 +1326,12 @@
           :body '(document-edn-print (symbol-value))}
          {:name 'parsed-symbol :params [] :param-types [] :result :document :effects #{}
           :body '(document-edn-read "actor/run")}
+         {:name 'list-value :params [] :param-types [] :result :document :effects #{}
+          :body '(document-list (document-symbol (symbol "actor/run")) (document-i64 7))}
+         {:name 'list-text :params [] :param-types [] :result :string :effects #{}
+          :body '(document-edn-print (list-value))}
+         {:name 'parsed-list :params [] :param-types [] :result :document :effects #{}
+          :body '(document-edn-read "(actor/run 7)")}
          {:name 'bad-symbol :params [] :param-types [] :result :string :effects #{}
           :body '(document-edn-print (document-symbol (symbol "nil")))}
          {:name 'bad :params [] :param-types [] :result :document :effects #{}
@@ -1341,7 +1347,8 @@
                      "if(x.same()!==true)process.exit(3);"
                      "const c=x.commented();if(c[0]!=='map'||c[1][0][0]!==':a'||c[1][1][0]!==':b')process.exit(4);"
                      "if(x['symbol-text']()!=='actor/run'||x['parsed-symbol']()[0]!=='symbol')process.exit(5);"
-                     "for(const name of ['bad','bad-symbol']){let denied=false;try{x[name]()}catch(e){denied=true}if(!denied)process.exit(6);}"
+                     "if(x['list-text']()!=='(actor/run 7)'||x['parsed-list']()[0]!=='list')process.exit(6);"
+                     "for(const name of ['bad','bad-symbol']){let denied=false;try{x[name]()}catch(e){denied=true}if(!denied)process.exit(7);}"
                      "}).catch(e=>{console.error(e);process.exit(70)})"))]
     (is (zero? (:exit result)) (str (:err result) (:out result)))
     (is (str/includes? source "const docEdnPrint="))
