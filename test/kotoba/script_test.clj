@@ -1206,8 +1206,25 @@
     (is (zero? (:exit result)) (:err result))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"expression type mismatch"
                           (script/emit
-                           (assoc-in kir [:functions 0 :body]
+                          (assoc-in kir [:functions 0 :body]
                                      (list 'typed-list-new type "wrong")))))))
+
+(deftest canonical-empty-bytes-cross-restricted-esm-boundaries
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['make 'identity] :effects #{}
+             :functions
+             [{:name 'make :params [] :param-types [] :result :bytes :effects #{}
+               :body '(bytes-empty)}
+              {:name 'identity :params ['value] :param-types [:bytes]
+               :result :bytes :effects #{} :body 'value}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),empty=x.make(),value=new Uint8Array([1,2,3]);"
+                "if(!(empty instanceof Uint8Array)||empty.byteLength!==0||x.identity(value)!==value)process.exit(2);"
+                "try{x.identity('not-bytes');process.exit(3)}catch(e){if(e.message!=='invalid-bytes')process.exit(4)}})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "bytesLimits:Object.freeze({valueBytes:65536})"))))
 
 (deftest bounded-records-seal-schema-field-order-and-persistent-updates
   (let [type [:record :demo/person [[:name :string] [:age :i64]
