@@ -8,10 +8,11 @@
 (def artifact-schema "kotoba-js-artifact/v1")
 (def floating-point-policy "ieee-754-f32-f64-v7")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
-(def ^:private value-types #{:i64 :f32 :f64 :string :keyword :symbol :map :bool :option-i64 :result-i64
+(def ^:private value-types #{:i64 :f32 :f64 :string :keyword :symbol :map :bool :bytes :option-i64 :result-i64
                              :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
 (def ^:private max-string-literal-bytes 4096)
 (def ^:private max-string-value-bytes 65536)
+(def ^:private max-bytes-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
 (def ^:private max-map-entries 128)
 (def ^:private max-vector-items 16384)
@@ -231,6 +232,7 @@
            :symbol "assertSymbol("
            :map "assertMap("
            :bool "assertBool("
+           :bytes "assertBytes("
            :option-i64 "assertOptionI64("
            :result-i64 "assertResultI64("
            :vector-i64 "assertVectorI64("
@@ -913,6 +915,7 @@
              then-type)
         do (do (when (empty? args) (fail! "KIR do requires a value" {:node form}))
                (last (mapv #(infer-type % env signatures) args)))
+        bytes-empty (do (require-arity! op args 0) :bytes)
         result-ok-of
         (let [[type payload] args]
           (require-arity! op args 2)
@@ -1388,6 +1391,7 @@
       (= op 'typed-list-new)
       (str "makeTypedList(" (type-js (first args)) ",["
            (str/join "," (map a (rest args))) "])")
+      (= op 'bytes-empty) "emptyBytes"
       (= op 'hetero-vector-new)
       (str "makeHeterogeneousVector(" (type-js (first args)) ",["
            (str/join "," (map a (rest args))) "])")
@@ -1825,6 +1829,7 @@
                (str ",stringLimits:Object.freeze({literalBytes:" max-string-literal-bytes
                     ",moduleLiteralBytes:" max-string-value-bytes
                     ",valueBytes:" max-string-value-bytes "})"
+                    ",bytesLimits:Object.freeze({valueBytes:" max-bytes-value-bytes "})"
                     ",keywordLimits:Object.freeze({valueBytes:" max-keyword-bytes "})"))
              (when (= :kotoba.kir/v4 (:format kir))
                (str ",mapLimits:Object.freeze({entries:" max-map-entries "})"
@@ -1983,6 +1988,9 @@
              "const f32ToI64Truncating=v=>{v=assertF32(v);if(!Number.isFinite(v))"
              "throw new Error('invalid-f32-to-i64');return checkedI64Range(BigInt(Math.trunc(v)));};"
              "const assertBool=v=>{if(typeof v!=='boolean')throw new Error('invalid-bool');return v;};"
+             "const assertBytes=v=>{if(!(v instanceof Uint8Array))throw new Error('invalid-bytes');"
+             "if(v.byteLength>" max-bytes-value-bytes ")throw new Error('bytes-too-large');return v;};"
+             "const emptyBytes=Object.freeze(new Uint8Array(0));"
              "const optionNone=Object.freeze([false]);"
              "const optionSome=v=>Object.freeze([true,assertI64(v)]);"
              "const assertOptionI64=v=>{if(!Array.isArray(v)||(v.length!==1&&v.length!==2)||"
@@ -2001,7 +2009,7 @@
              ")throw new Error('adt-node-limit');if(d>" max-type-depth
              ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);if(t==='f32')return assertF32(v);if(t==='f64')return assertF64(v);"
              "if(t==='string')return assertString(v);if(t==='keyword')return assertKeyword(v);"
-             "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);"
+             "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);if(t==='bytes')return assertBytes(v);"
              "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
              "if(t==='vector-i64')return assertVectorI64(v);"
              "if(t==='vector-f64')return assertVectorF64(v);"
