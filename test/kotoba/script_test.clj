@@ -111,7 +111,9 @@
         {:format :kotoba.kir/v4 :entry 'main :exports ['main 'consume] :effects #{}
          :functions
          [{:name 'main :params [] :param-types [] :result :i64 :effects #{}
-           :body '(let [f (pair 7 0)] (consume f))}
+           :body '(consume (make))}
+          {:name 'make :params [] :param-types [] :closure-result? true
+           :result :i64 :effects #{} :body '(pair 7 0)}
           {:name 'consume :params ['f] :param-types [:i64]
            :closure-param-indexes [0]
            :result :i64 :effects #{} :body '(pair-first f)}]}
@@ -124,6 +126,7 @@
                 "if(e.message!=='invalid-closure-capture-chain')process.exit(4)}})")
         result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "return assertClosure(Object.freeze([7n,0n]));"))
     (is (str/includes? source "k$f$1=assertClosure(k$f$1);"))
     (is (not (str/includes? source "k$f$1=assertI64(k$f$1);")))))
 
@@ -142,6 +145,21 @@
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo #"KIR function type signature is invalid"
            (script/emit (assoc base :format :kotoba.kir/v3)))))))
+
+(deftest malformed-closure-result-refinements-are-rejected
+  (let [base {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
+              :functions [{:name 'main :params [] :param-types []
+                           :closure-result? true
+                           :result :i64 :effects #{} :body '(pair 1 0)}]}]
+    (doseq [value [false 1 :yes]]
+      (testing (pr-str value)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"KIR function type signature is invalid"
+             (script/emit (assoc-in base [:functions 0 :closure-result?]
+                                    value))))))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"KIR function type signature is invalid"
+         (script/emit (assoc-in base [:functions 0 :result] :string))))))
 
 (deftest ambient-access-guard-catches-real-reach-out
   (testing "the guard fires on each ambient access form"

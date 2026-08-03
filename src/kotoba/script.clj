@@ -290,7 +290,22 @@
                        result-type (cond typed?          result
                                          (= :bool result) :bool
                                          :else            :i64)
-                       closure-indexes (:closure-param-indexes function)]
+                       closure-indexes (:closure-param-indexes function)
+                       closure-result? (:closure-result? function)
+                       closure-indexes-valid?
+                       (or (not (contains? function :closure-param-indexes))
+                           (and typed?
+                                (vector? closure-indexes)
+                                (= closure-indexes
+                                   (vec (sort (distinct closure-indexes))))
+                                (every? #(and (integer? %) (<= 0 %)
+                                              (< % (count params))
+                                              (= :i64 (nth types % nil)))
+                                        closure-indexes)))
+                       closure-result-valid?
+                       (or (not (contains? function :closure-result?))
+                           (and typed? (true? closure-result?)
+                                (= :i64 result-type)))]
                    (when-not (and (symbol? name) (nil? (namespace name))
                                   (vector? params) (vector? types)
                                   (every? #(and (symbol? %) (nil? (namespace %))) params)
@@ -298,18 +313,12 @@
                                   (= (count params) (count types))
                                   (every? #(do (validate-value-type! %) true) types)
                                   (do (validate-value-type! result-type) true)
-                                  (or (not (contains? function :closure-param-indexes))
-                                      (and typed?
-                                           (vector? closure-indexes)
-                                           (= closure-indexes
-                                              (vec (sort (distinct closure-indexes))))
-                                           (every? #(and (integer? %) (<= 0 %)
-                                                         (< % (count params))
-                                                         (= :i64 (nth types % nil)))
-                                                   closure-indexes))))
+                                  closure-indexes-valid?
+                                  closure-result-valid?)
                      (fail! "KIR function type signature is invalid" {:function name}))
                    [name {:params params :param-types types :result result-type
-                          :closure-param-indexes (or closure-indexes [])}])))
+                          :closure-param-indexes (or closure-indexes [])
+                          :closure-result? (true? closure-result?)}])))
           (:functions kir))))
 
 (declare infer-type)
@@ -1734,7 +1743,7 @@
                          (let [counter (volatile! 0)
                                param-js-names (mapv #(fresh-js-name counter %) params)
                                env (zipmap params param-js-names)
-                               {:keys [param-types result closure-param-indexes]}
+                               {:keys [param-types result closure-param-indexes closure-result?]}
                                (get signatures name)
                                closure-dispatcher? (closure-dispatcher? name params)
                                closure-param-indexes (set closure-param-indexes)
@@ -1751,7 +1760,12 @@
                                               (map vector param-js-names param-types)))]
                            (str "function " (js-name name) "("
                                 (str/join "," param-js-names) "){charge();" guards "return "
-                                (guard-expr result (emit-expr body env functions counter)) ";}")))
+                                (if closure-result?
+                                  (str "assertClosure("
+                                       (emit-expr body env functions counter) ")")
+                                  (guard-expr result
+                                              (emit-expr body env functions counter)))
+                                ";}")))
                        (:functions kir)))
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
