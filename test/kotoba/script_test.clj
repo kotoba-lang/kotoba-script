@@ -58,6 +58,26 @@
     (is (str/includes? source "let fuel=512;"))
     (is (not (re-find ambient-access-pattern source)))))
 
+(deftest do-emits-in-order-and-returns-its-last-value
+  (let [do-kir
+        {:format :kotoba.kir/v4 :entry nil :exports ['value 'traps] :effects #{}
+         :functions
+         [{:name 'value :params [] :param-types [] :result :string :effects #{}
+           :body '(do 1 (+ 1 1) "done")}
+          {:name 'traps :params [] :param-types [] :result :i64 :effects #{}
+           :body '(do (quot 1 0) 5)}]}
+        source (script/emit do-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.value()!=='done')process.exit(2);"
+                "try{x.traps();process.exit(3)}catch(e){"
+                "if(e.message!=='division-by-zero')process.exit(4)}})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (is (str/includes? source "void (quot(1n,0n));return 5n;"))
+    (is (= source (script/emit do-kir)))))
+
 (deftest ambient-access-guard-catches-real-reach-out
   (testing "the guard fires on each ambient access form"
     (doseq [leak ["const g=globalThis;" "const d=window.location;"
