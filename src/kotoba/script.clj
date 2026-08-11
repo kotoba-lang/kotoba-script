@@ -1760,13 +1760,38 @@
            ",trustPolicyDigest:" (js-string trust-policy-digest)
            ",packageReceiptDigest:" (js-string package-receipt-digest)))))
 
+(def default-fuel
+  "The historical per-instance budget, kept as the default so an emit that
+  declares nothing produces exactly what it did before.
+
+  Fuel is a charge per function ENTRY, and `loop`/`recur` desugars to a
+  self-calling helper (compiler ADR 0173 is explicit that zero-charge recur is
+  not claimed), so this number is also a ceiling on how many times a guest may
+  iterate FOR THE LIFE OF AN INSTANCE — measured 2026-08-11: a plain countdown
+  returns at n=510 and traps at n=600. A guest reading input longer than that
+  cannot finish at this budget, however much the host was willing to spend,
+  which is why the value has to be the host's to choose.
+
+  Raising it does not widen what a module may DO. Authority is the policy's
+  job — a module that requests no capabilities cannot observe anything at any
+  budget — and memory stays bounded by the separate node/byte limits. Fuel
+  bounds one thing: how long a call may run before the host gets control back."
+  512)
+
 (defn emit
-  "Emit a restricted ESM string from checked `:kotoba.kir/v3` data."
+  "Emit a restricted ESM string from checked `:kotoba.kir/v3` data.
+
+  `:fuel` declares the per-instance budget baked into the artifact; it defaults
+  to `default-fuel`. The compiler resolves it from `--fuel` or policy
+  `:budgets {:fuel n}` and passes it here — before 2026-08-11 this emitter
+  ignored the declared value and always wrote 512, so `--fuel 100000` was
+  accepted and had no effect."
   ([kir] (emit kir {}))
   ([kir {:keys [source-digest kir-digest compiler-version
                 module-graph-digest module-source-digests
                 package-lock-digest trust-policy-digest
-                package-receipt-digest]}]
+                package-receipt-digest fuel]
+         :or {fuel default-fuel}}]
   (when-not (contains? supported-kir-formats (:format kir))
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
@@ -2511,7 +2536,7 @@
              "const mapAssoc=(m,entries)=>{m=assertMap(m);const merged=new Map(m);"
              "for(const e of entries){if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-map');"
              "merged.set(assertKeyword(e[0]),assertI64(e[1]));}return makeMap(Array.from(merged));};"
-             "let fuel=512;"
+             (str "let fuel=" fuel ";")
              "const charge=()=>{fuel--;if(fuel<0)throw new Error('fuel-exhausted');};"
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"
              "if(a===-9223372036854775808n&&b===-1n)throw new Error('signed-division-overflow');return a/b;};"
