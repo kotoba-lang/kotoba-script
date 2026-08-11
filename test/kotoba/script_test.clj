@@ -747,31 +747,31 @@
   (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['contains 'fold 'contains-fold]
              :effects #{}
              :functions [{:name 'contains :params ['haystack 'needle]
-                          :param-types [:string :string] :result :i64 :effects #{}
+                          :param-types [:string :string] :result :bool :effects #{}
                           :body '(string-contains? haystack needle)}
                          {:name 'fold :params ['value] :param-types [:string]
                           :result :string :effects #{}
                           :body '(string-fold-case value)}
                          {:name 'contains-fold :params ['haystack 'needle]
-                          :param-types [:string :string] :result :i64 :effects #{}
+                          :param-types [:string :string] :result :bool :effects #{}
                           :body '(string-contains? (string-fold-case haystack)
                                                    (string-fold-case needle))}]}
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
-                "if(x.contains('final decision made','decision')!==1n)process.exit(2);"
-                "if(x.contains('final decision made','banana')!==0n)process.exit(3);"
+                "if(x.contains('final decision made','decision')!==true)process.exit(2);"
+                "if(x.contains('final decision made','banana')!==false)process.exit(3);"
                 "try{x.contains('abc','');process.exit(4)}"
                 "catch(e){if(e.message!=='empty-string-search-needle')process.exit(5)}"
                 "try{x.contains('','');process.exit(6)}"
                 "catch(e){if(e.message!=='empty-string-search-needle')process.exit(7)}"
                 "if(x.fold('FINAL DECISION')!=='final decision')process.exit(8);"
                 "if(x.fold('CAFÉ')!=='café')process.exit(9);"
-                "if(x.contains('x'.repeat(40000),'y'.repeat(30000))!==0n)process.exit(10);"
-                "if(x.contains('This Is The FINAL Decision','final decision')!==0n)process.exit(11);"
-                "if(x['contains-fold']('This Is The FINAL Decision','final decision')!==1n)process.exit(12);"
-                "if(x['contains-fold']('CAFÉ menu','café')!==1n)process.exit(13)})")
+                "if(x.contains('x'.repeat(40000),'y'.repeat(30000))!==false)process.exit(10);"
+                "if(x.contains('This Is The FINAL Decision','final decision')!==false)process.exit(11);"
+                "if(x['contains-fold']('This Is The FINAL Decision','final decision')!==true)process.exit(12);"
+                "if(x['contains-fold']('CAFÉ menu','café')!==true)process.exit(13)})")
         result (run-node "node" "--input-type=module" "-e" js)]
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "stringContains"))
