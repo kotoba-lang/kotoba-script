@@ -712,7 +712,7 @@
       (do (require-arity! op args 1) (require-type! (first types) :string (first args)) :i64)
       (= op 'string=?)
       (do (require-arity! op args 2)
-          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :bool)
       (= op 'string-concat)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
@@ -727,7 +727,7 @@
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :string)
       (= op 'string-contains?)
       (do (require-arity! op args 2)
-          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :bool)
       (= op 'string-code-point-at)
       (do (require-arity! op args 2)
           (require-type! (first types) :string (first args))
@@ -1534,7 +1534,7 @@
       (= op 'pair-second) (str (a (first args)) "[1]")
       (= op 'cap-call) (str "callCapability(" (first args) "," (a (second args)) ")")
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
-      (= op 'string=?) (str "((" (a (first args)) "===" (a (second args)) ")?1n:0n)")
+      (= op 'string=?) (str "(" (a (first args)) "===" (a (second args)) ")")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
       (= op 'string-substring) (str "stringSubstring(" (a (first args)) ","
                                     (a (second args)) "," (a (nth args 2)) ")")
@@ -2240,7 +2240,7 @@
              "catch(_){throw new Error('string-substring-code-point-boundary');}};"
              "const stringContains=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
              "if(needle.length===0)throw new Error('empty-string-search-needle');"
-             "return value.includes(needle)?1n:0n;};"
+             "return value.includes(needle);};"
              "const stringCodePointAt=(value,offset)=>{value=assertString(value);offset=Number(offset);"
              "const bytes=new TextEncoder().encode(value);"
              "if(!Number.isSafeInteger(offset)||offset<0||offset>=bytes.length)throw new Error('string-code-point-offset-bounds');"
