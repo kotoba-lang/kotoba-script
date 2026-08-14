@@ -595,6 +595,24 @@
     (is (re-find #"requiredCapabilities:Object.freeze\(\[7\]\)" source))
     (is (re-find #"capability-denied" source))))
 
+(deftest typed-cap-call-i64-hosts-as-call-capability
+  (let [kir {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 7]}
+             :functions [{:name 'main :params [] :param-types [] :result :i64
+                          :body '(typed-cap-call 7 :i64 :i64 0)}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({7:(_v)=>99});"
+                "if(x.main()!==99n)process.exit(2)})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (str/includes? source "callCapability(7,"))
+    (is (zero? (:exit result)) (:err result)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"i64 request/result only"
+                        (script/emit
+                         {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 4]}
+                          :functions [{:name 'main :params [] :param-types [] :result :string
+                                       :body '(typed-cap-call 4 :string :string "x")}]}))))
+
 (deftest module-graph-identity-is-frozen-into-the-esm-artifact
   (let [a (apply str (repeat 64 "a"))
         b (apply str (repeat 64 "b"))
