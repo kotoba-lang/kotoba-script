@@ -378,7 +378,17 @@
            {:operation op :expected expected :actual (count args)})))
 
 (defn- infer-call-type [op args env signatures]
-  (let [types (mapv #(infer-type % env signatures) args)]
+  (if (= op 'typed-cap-call)
+    (do (require-arity! op args 4)
+        (when-not (integer? (first args))
+          (fail! "typed-cap-call capability id must be an integer literal"
+                 {:id (first args)}))
+        (validate-value-type! (nth args 1))
+        (validate-value-type! (nth args 2))
+        (require-type! (infer-type (nth args 3) env signatures)
+                       (nth args 1) (nth args 3))
+        (nth args 2))
+    (let [types (mapv #(infer-type % env signatures) args)]
     (cond
       (contains? '#{+ - * quot bit-xor bit-and} op)
       (do (require-arity! op args (if (contains? '#{quot bit-xor bit-and} op)
@@ -708,20 +718,6 @@
       (= op 'cap-call)
       (do (require-arity! op args 2) (require-type! (second types) :i64 (second args)) :i64)
 
-      ;; amu elaborates `(clock/now seed)` to `(typed-cap-call 7 :i64 :i64 seed)`.
-      ;; js-kotoba-v1 hosts that as the existing i64 `callCapability` surface.
-      ;; Other request/result types are kit ABI (`:wasm-aot`), not invented here.
-      (= op 'typed-cap-call)
-      (do (require-arity! op args 4)
-          (when-not (integer? (first args))
-            (fail! "typed-cap-call capability id must be an integer literal"
-                   {:id (first args)}))
-          (when-not (and (= (nth args 1) :i64) (= (nth args 2) :i64))
-            (fail! "js-kotoba-v1 typed-cap-call is i64 request/result only"
-                   {:request (nth args 1) :result (nth args 2)}))
-          (require-type! (nth types 3) :i64 (nth args 3))
-          :i64)
-
       (= op 'string-byte-length)
       (do (require-arity! op args 1) (require-type! (first types) :string (first args)) :i64)
       (= op 'string=?)
@@ -887,7 +883,7 @@
           (require-type! actual wanted arg))
         result)
 
-      :else (fail! "unsupported KIR operation" {:operation op}))))
+      :else (fail! "unsupported KIR operation" {:operation op})))))
 
 (defn- infer-type [form env signatures]
   (cond
@@ -1550,8 +1546,9 @@
       (= op 'typed-cap-call)
       (if (and (= (nth args 1) :i64) (= (nth args 2) :i64))
         (str "callCapability(" (first args) "," (a (nth args 3)) ")")
-        (fail! "js-kotoba-v1 typed-cap-call is i64 request/result only"
-               {:request (nth args 1) :result (nth args 2)}))
+        (str "callTypedCapability(" (first args) ","
+             (type-js (nth args 1)) "," (type-js (nth args 2)) ","
+             (a (nth args 3)) ")"))
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "(" (a (first args)) "===" (a (second args)) ")")
       (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
@@ -2560,7 +2557,13 @@
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"
              "if(a===-9223372036854775808n&&b===-1n)throw new Error('signed-division-overflow');return a/b;};"
              "const callCapability=(id,value)=>{const f=grants[id];"
-             "if(typeof f!=='function')throw new Error('capability-denied:'+id);return i64(BigInt(f(value)));};\n"
+             "if(typeof f!=='function')throw new Error('capability-denied:'+id);return i64(BigInt(f(value)));};"
+             "const callTypedCapability=(id,requestType,resultType,request)=>{"
+             "const f=grants[id];"
+             "if(typeof f!=='function')throw new Error('capability-denied:'+id);"
+             "request=assertTypedValue(requestType,request,0,{nodes:0});"
+             "const result=f(request,Object.freeze({request:requestType,result:resultType}));"
+             "return assertTypedValue(resultType,result,0,{nodes:0});};\n"
              function-source "\n"
              "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (js-name f))) exports)) "});\n}\n")]
     (verify-output! source))))

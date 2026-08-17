@@ -606,12 +606,46 @@
                 "if(x.main()!==99n)process.exit(2)})")
         result (run-node "node" "--input-type=module" "-e" js)]
     (is (str/includes? source "callCapability(7,"))
-    (is (zero? (:exit result)) (:err result)))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"i64 request/result only"
-                        (script/emit
-                         {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 4]}
-                          :functions [{:name 'main :params [] :param-types [] :result :string
-                                       :body '(typed-cap-call 4 :string :string "x")}]}))))
+    (is (zero? (:exit result)) (:err result))))
+
+(deftest typed-cap-call-interns-host-document-and-variant-results
+  (let [request [:variant :kotoba.dataspace/request [[:facet-enter :bool] [:facet-leave :i64]]]
+        result [:variant :kotoba.dataspace/result
+                [[:facet [:record :kotoba.dataspace/facet [[:id :i64]]]]
+                 [:error [:record :kotoba.dataspace/error
+                          [[:code :keyword] [:message :string]]]]]]
+        kir {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 24]}
+             :functions [{:name 'main :params [] :param-types [] :result :i64
+                          :body (list 'let ['answer
+                                            (list 'typed-cap-call 24 request result
+                                                  (list 'variant-new request :facet-enter false))]
+                                      (list 'variant-match result 'answer
+                                            [[:facet 'f (list 'record-get
+                                                              [:record :kotoba.dataspace/facet [[:id :i64]]]
+                                                              'f :id)]
+                                             [:error 'e 0]]))}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({24:(req,contract)=>{"
+                "if(req[1]!==':facet-enter')process.exit(3);"
+                "const rec=contract.result[2].find(([n])=>n===':facet')[1];"
+                "return [contract.result,':facet',[rec,1n]];}});"
+                "if(x.main()!==1n)process.exit(2)})")
+        probe (run-node "node" "--input-type=module" "-e" js)]
+    (is (str/includes? source "callTypedCapability(24,"))
+    (is (zero? (:exit probe)) (:err probe)))
+  (let [source (script/emit
+                {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 4]}
+                 :functions [{:name 'main :params [] :param-types [] :result :string
+                              :body '(typed-cap-call 4 :string :string "x")}]})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({4:(v)=>v+'!'});"
+                "if(x.main()!=='x!')process.exit(2)})")
+        probe (run-node "node" "--input-type=module" "-e" js)]
+    (is (str/includes? source "callTypedCapability(4,"))
+    (is (zero? (:exit probe)) (:err probe))))
 
 (deftest module-graph-identity-is-frozen-into-the-esm-artifact
   (let [a (apply str (repeat 64 "a"))
