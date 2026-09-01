@@ -503,6 +503,19 @@
           (require-type! (nth types 0) :vector-i64 (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
 
+      ;; Same operand and result types as `vector-assoc`. The difference is a
+      ;; claim about liveness, which the frontend's affine analysis checks, not
+      ;; a difference the type rule can see.
+      (= op 'vector-assoc!)
+      (do (require-arity! op args 3)
+          (require-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1))
+          (require-type! (nth types 2) :i64 (nth args 2)) :vector-i64)
+
+      (= op 'vector-alloc)
+      (do (require-arity! op args 1)
+          (require-type! (nth types 0) :i64 (nth args 0)) :vector-i64)
+
       (= op 'vector-f64-new)
       (do (doseq [[arg type] (map vector args types)] (require-type! type :f64 arg))
           (when (> (count args) max-vector-items)
@@ -1481,6 +1494,9 @@
       (= op 'vector-assoc) (str "vectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) ","
                                 (a (nth args 2)) ")")
       (= op 'vector-conj) (str "vectorConj(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'vector-assoc!) (str "vectorAssocInPlace(" (a (nth args 0)) "," (a (nth args 1)) ","
+                                 (a (nth args 2)) ")")
+      (= op 'vector-alloc) (str "vectorAlloc(" (a (nth args 0)) ")")
       (= op 'vector-f64-new) (str "makeVectorF64([" (str/join "," (map a args)) "])")
       (= op 'vector-f64-count) (str "BigInt(assertVectorF64(" (a (first args)) ").length)")
       (= op 'vector-f64-get) (str "vectorF64Get(" (a (nth args 0)) "," (a (nth args 1)) ",()=>"
@@ -2210,7 +2226,34 @@
              "const makeVector=items=>{if(!Array.isArray(items))throw new Error('invalid-vector-i64');"
              "if(items.length>" max-vector-items ")throw new Error('vector-too-large');"
              "return Object.freeze(items.map(assertI64));};"
-             "const assertVectorI64=v=>makeVector(v);"
+             ;; A linear handle is exempt from BOTH costs `makeVector` imposes:
+             ;; the freeze, which an in-place store cannot survive, and the
+             ;; per-element re-assert, which made every operation O(length)
+             ;; whether or not it copied. Membership is by identity in a
+             ;; WeakSet, so a handle cannot be forged by shape.
+             "const linearValues=new WeakSet();"
+             "const assertVectorI64=v=>linearValues.has(v)?v:makeVector(v);"
+             ;; TOTAL, not live: nothing here is freed, and an instance is the
+             ;; unit that goes away. Without it a guest calls vector-alloc in a
+             ;; loop and takes the per-vector bound each time, for as long as it
+             ;; likes.
+             "let vectorItemsAllocated=0;"
+             "const vectorAlloc=n=>{n=assertI64(n);"
+             "if(n<0n||n>" max-vector-items "n)throw new Error('vector-too-large');"
+             "const count=Number(n);"
+             "if(vectorItemsAllocated+count>" (* max-vector-items 8)
+             ")throw new Error('vector-total-too-large');"
+             "vectorItemsAllocated+=count;"
+             ;; BigInt zero: a Number 0 here reads as i64 on the JVM half and
+             ;; breaks only on the runtime that actually ships.
+             "const out=new Array(count).fill(0n);linearValues.add(out);return out;};"
+             ;; Refuses a handle it was not given, rather than copying. Copying
+             ;; would make the bang mean nothing while still appearing to work.
+             "const vectorAssocInPlace=(v,i,item)=>{"
+             "if(!linearValues.has(v))throw new Error('vector-not-linear');"
+             "i=assertI64(i);"
+             "if(i<0n||i>=BigInt(v.length))throw new Error('vector-index-out-of-range');"
+             "v[Number(i)]=assertI64(item);return v;};"
              "const vectorGet=(v,i,fallback)=>{v=assertVectorI64(v);i=assertI64(i);"
              "return i>=0n&&i<BigInt(v.length)?v[Number(i)]:assertI64(fallback());};"
              "const vectorAt=(v,i)=>{v=assertVectorI64(v);i=assertI64(i);"
