@@ -751,6 +751,9 @@
       (= op 'string-contains?)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :bool)
+      (= op 'string-index-of)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
       (= op 'string-code-point-at)
       (do (require-arity! op args 2)
           (require-type! (first types) :string (first args))
@@ -1595,6 +1598,7 @@
       (= op 'string-replace-all) (str "stringReplaceAll(" (a (first args)) ","
                                       (a (second args)) "," (a (nth args 2)) ")")
       (= op 'string-contains?) (str "stringContains(" (a (first args)) "," (a (second args)) ")")
+      (= op 'string-index-of) (str "stringIndexOf(" (a (first args)) "," (a (second args)) ")")
       (= op 'string-code-point-at) (str "stringCodePointAt(" (a (first args)) "," (a (second args)) ")")
       (= op 'string-fold-case) (str "stringFoldCase(" (a (first args)) ")")
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
@@ -2322,6 +2326,13 @@
              "const stringContains=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
              "if(needle.length===0)throw new Error('empty-string-search-needle');"
              "return value.includes(needle);};"
+             "const stringIndexOf=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
+             "if(needle.length===0)throw new Error('empty-string-search-needle');"
+             "const hb=new TextEncoder().encode(value);const nb=new TextEncoder().encode(needle);"
+             "outer:for(let i=0;i+nb.length<=hb.length;i++){"
+             "for(let j=0;j<nb.length;j++){if(hb[i+j]!==nb[j])continue outer;}"
+             "let bytes=0;for(let k=0;k<i;k++){if((hb[k]&0xc0)!==0x80)bytes++;}return bytes;}"
+             "return -1;};"
              "const stringCodePointAt=(value,offset)=>{value=assertString(value);offset=Number(offset);"
              "const bytes=new TextEncoder().encode(value);"
              "if(!Number.isSafeInteger(offset)||offset<0||offset>=bytes.length)throw new Error('string-code-point-offset-bounds');"
