@@ -1244,6 +1244,20 @@
           (require-arity! op args 3) (validate-value-type! type)
           (require-type! (infer-type left env signatures) type left)
           (require-type! (infer-type right env signatures) type right) :i64)
+        typed-map-keys
+        (let [[type value] args]
+          (require-arity! op args 2) (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (fail! "typed map projection requires [:map key-type value-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          [:list (second type)])
+        typed-map-vals
+        (let [[type value] args]
+          (require-arity! op args 2) (validate-value-type! type)
+          (when-not (canonical-typed-map-type? type)
+            (fail! "typed map projection requires [:map key-type value-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          [:list (nth type 2)])
         record-new
         (let [[type & values] args
               fields (when (record-type? type) (nth type 2))]
@@ -1473,6 +1487,14 @@
       (= op 'typed-map-equal)
       (str "(typedMapEqual(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")?1n:0n)")
+      (= op 'typed-map-keys)
+      (str "makeTypedList(" (type-js [:list (second (first args))])
+           ",assertTypedMap(" (type-js (first args)) "," (a (second args))
+           ")[1].map(e=>e[0]))")
+      (= op 'typed-map-vals)
+      (str "makeTypedList(" (type-js [:list (nth (first args) 2)])
+           ",assertTypedMap(" (type-js (first args)) "," (a (second args))
+           ")[1].map(e=>e[1]))")
       (= op 'record-new)
       (str "makeRecord(" (type-js (first args)) ",["
            (str/join "," (map a (rest args))) "])")

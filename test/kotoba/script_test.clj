@@ -1754,6 +1754,31 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "typedMapLimits:Object.freeze({entries:31})"))))
 
+(deftest typed-map-keys-and-vals-project-in-entry-order
+  (let [type [:map :keyword :i64]
+        keys-type [:list :keyword]
+        vals-type [:list :i64]
+        kir {:format :kotoba.kir/v4 :entry nil :exports ['keys-count 'first-key 'first-val]
+             :effects #{}
+             :functions
+             [{:name 'keys-count :params [] :param-types [] :result :i64 :effects #{}
+               :body (list 'vector-count (list 'typed-map-keys type
+                                               (list 'typed-map-new type :b 2 :a 1)))}
+              {:name 'first-key :params [] :param-types [] :result keys-type :effects #{}
+               :body (list 'typed-map-keys type (list 'typed-map-new type :b 2 :a 1))}
+              {:name 'first-val :params [] :param-types [] :result vals-type :effects #{}
+               :body (list 'typed-map-vals type (list 'typed-map-new type :b 2 :a 1))}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result (run-node
+                "node" "--input-type=module" "-e"
+                (str "import('data:text/javascript;base64," encoded
+                     "').then(m=>{const x=m.instantiateKotoba({});"
+                     "const k=x['first-key'](),v=x['first-val']();"
+                     "if(x['keys-count']()!==2n||k[1][0]!==':a'||k[1][1]!==':b'||"
+                     "v[1][0]!==1n||v[1][1]!==2n)process.exit(2)})"))]
+    (is (zero? (:exit result)) (:err result))))
+
 (deftest bounded-xml-subset-has-exact-path-text-and-typed-absence-semantics
   (let [option-string [:option :string]
         kir {:format :kotoba.kir/v4 :entry nil
