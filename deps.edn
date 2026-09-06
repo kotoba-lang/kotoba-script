@@ -3,4 +3,8 @@
         ;; Java-17-compatible pin for the compiler's cross-platform matrix.
         com.google.javascript/closure-compiler-unshaded {:mvn/version "v20240317"}}
  :aliases {:test {:extra-paths ["test"]
-                  :main-opts ["-m" "kotoba.script-test"]}}}
+                  :main-opts ["-m" "kotoba.script-test"]}
+           ;; Regenerate test/fixtures/parity/ from the JVM emitter; the nbb
+           ;; parity test (`npm run test-nbb`) compares against it byte for byte.
+           :golden {:extra-paths ["test"]
+                    :main-opts ["scripts/gen-parity-golden.clj"]}}}

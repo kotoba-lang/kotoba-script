@@ -9,6 +9,30 @@ Restricted JavaScript backend for Kotoba. This package accepts only checked
 .kotoba -> kotoba-lang/compiler -> checked KIR -> kotoba-script -> .mjs
 ```
 
+## Runtimes: JVM and nbb, same bytes
+
+`src/kotoba/script.cljc` is portable. The emitter is string construction over
+checked KIR, so it runs on the JVM and on nbb/Node and emits **the same
+module byte for byte** on both. That is what lets `amu compile --target js`
+run without a JDK (`--jvm-free`). Three seams differ per host and are marked
+with reader conditionals in the source:
+
+| seam | JVM | nbb/Node |
+|---|---|---|
+| integer literals | `integer?` | BigInt (the nbb frontend lowers i64 to BigInt) or a plain JS integer in hand-built KIR |
+| f64 literal text | `Double.toString` | `java-double-string`, JDK 19+ shortest-digit layout rebuilt from `Number.prototype.toExponential` (incl. the `4.9E-324` spelling of `MIN_VALUE`) |
+| output verification | Closure Compiler AST walk | `node --check` for syntax + a token scan outside string literals for the same forbidden globals / properties / import forms. Weaker than the AST walk; its failure data says `:verifier :token-scan` |
+
+A hand-built KIR on nbb cannot say `2.0` (a whole-number double reads as
+i64 there); the compiler route never needs to, because it lowers f64 to
+`(f64-from-bits …)`.
+
+```bash
+clojure -M:test        # JVM suite (65 tests)
+npm run test-nbb       # nbb parity: emit bytes == JVM golden, Double.toString table, verifier refusals
+clojure -M:golden      # regenerate test/fixtures/parity/ from the JVM emitter after an emitter change
+```
+
 Generated modules expose `kotobaArtifact` and `instantiateKotoba(grants)`.
 They use no ambient browser/Node authority and execute capability effects only
 through explicitly supplied grant functions.

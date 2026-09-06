@@ -1,3 +1,4 @@
 /.cpcache/
 /target/
 /.clj-kondo/.cache/
+node_modules/
