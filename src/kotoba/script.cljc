@@ -847,6 +847,9 @@
       (= op 'string-index-of)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
+      (= op 'string-split-count)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :string arg)) :i64)
       (= op 'string-code-point-at)
       (do (require-arity! op args 2)
           (require-type! (first types) :string (first args))
@@ -1694,6 +1697,7 @@
                                       (a (second args)) "," (a (nth args 2)) ")")
       (= op 'string-contains?) (str "stringContains(" (a (first args)) "," (a (second args)) ")")
       (= op 'string-index-of) (str "stringIndexOf(" (a (first args)) "," (a (second args)) ")")
+      (= op 'string-split-count) (str "stringSplitCount(" (a (first args)) "," (a (second args)) ")")
       (= op 'string-code-point-at) (str "stringCodePointAt(" (a (first args)) "," (a (second args)) ")")
       (= op 'string-fold-case) (str "stringFoldCase(" (a (first args)) ")")
       (= op 'keyword-from-string) (str "keywordFromString(" (a (first args)) ")")
@@ -2498,8 +2502,18 @@
              "const hb=new TextEncoder().encode(value);const nb=new TextEncoder().encode(needle);"
              "outer:for(let i=0;i+nb.length<=hb.length;i++){"
              "for(let j=0;j<nb.length;j++){if(hb[i+j]!==nb[j])continue outer;}"
-             "let bytes=0;for(let k=0;k<i;k++){if((hb[k]&0xc0)!==0x80)bytes++;}return bytes;}"
-             "return -1;};"
+             ;; i64 BYTE offset (guest-grammar contract: "first UTF-8 byte offset
+             ;; ... -1 when absent"). Until 2026-09-06 this returned a JS Number
+             ;; of CODE POINTS: wrong unit, and `i+1n` in the guest threw
+             ;; "Cannot mix BigInt and other types".
+             "return BigInt(i);}"
+             "return -1n;};"
+             ;; segment count for a non-empty separator, non-overlapping -- the
+             ;; wasm host's `string-split-count` (browser-host.mjs T4.2), so both
+             ;; JS routes answer the same number.
+             "const stringSplitCount=(value,sep)=>{value=assertString(value);sep=assertString(sep);"
+             "if(sep.length===0)throw new Error('empty-string-split-separator');"
+             "let i=0,n=1n;while(true){const idx=value.indexOf(sep,i);if(idx<0)return n;i=idx+sep.length;n+=1n;}};"
              "const stringCodePointAt=(value,offset)=>{value=assertString(value);offset=Number(offset);"
              "const bytes=new TextEncoder().encode(value);"
              "if(!Number.isSafeInteger(offset)||offset<0||offset>=bytes.length)throw new Error('string-code-point-offset-bounds');"
