@@ -1911,3 +1911,28 @@
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
     (System/exit (if (pos? (+ fail error)) 1 0))))
+
+(deftest string-index-of-is-an-i64-byte-offset-and-split-count-counts-segments
+  ;; Guest-grammar contract: string-index-of -> i64 first UTF-8 BYTE offset,
+  ;; -1 when absent; string-split-count -> i64 segment count, non-empty sep.
+  ;; Before 2026-09-06 stringIndexOf returned a JS Number of code points, so a
+  ;; guest doing `(+ i 1)` threw "Cannot mix BigInt and other types", and
+  ;; string-split-count was not emitted at all ("unsupported KIR operation").
+  (let [kir {:format :kotoba.kir/v4 :entry nil :exports '[byte-offset absent segments]
+             :effects #{}
+             :functions [{:name 'byte-offset :params [] :param-types [] :result :i64
+                          :body '(+ (string-index-of "héllo wörld" "wö") 1)}
+                         {:name 'absent :params [] :param-types [] :result :i64
+                          :body '(string-index-of "abc" "zz")}
+                         {:name 'segments :params [] :param-types [] :result :i64
+                          :body '(string-split-count "a\nb\nc" "\n")}]}
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "console.log(String(x['byte-offset']())+' '+String(x.absent())+' '+String(x.segments()))})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    ;; "héllo " is 7 bytes (é = 2), so "wö" starts at byte 7; +1 -> 8.
+    (is (= "8 -1 3\n" (:out result)))
+    (is (= source (script/emit kir)))))
