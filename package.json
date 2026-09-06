@@ -1,0 +1,8 @@
+{
+  "name": "kotoba-script-tooling",
+  "private": true,
+  "devDependencies": { "nbb": "1.5.212" },
+  "scripts": {
+    "test-nbb": "nbb --classpath src test/nbb/parity.cljs"
+  }
+}

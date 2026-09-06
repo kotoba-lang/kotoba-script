@@ -1,9 +1,29 @@
 (ns kotoba.script
-  "Checked KIR -> restricted ES module backend. No source reader lives here."
-  (:require [clojure.string :as str])
-  (:import [com.google.javascript.jscomp CompilerOptions SourceFile]
-           [com.google.javascript.jscomp CompilerOptions$LanguageMode]
-           [com.google.javascript.rhino Node]))
+  "Checked KIR -> restricted ES module backend. No source reader lives here.
+
+  Portable `.cljc` (2026-09-06): the emitter is string construction over
+  checked KIR and runs unchanged on the JVM and on nbb/Node, so
+  `amu compile --target js` no longer needs a JDK. Three seams differ per
+  host and are marked with reader conditionals:
+
+  - integer literals: the nbb frontend lowers i64 to JS BigInt and f64 to
+    `(f64-from-bits <bits>)`, so on cljs a KIR integer may be a BigInt and a
+    raw double only appears in hand-built KIR (`int-literal?` / `f64-value?`);
+  - `Double.toString` formatting (`java-double-string` reproduces JDK 19+
+    shortest-digit output from `Number.prototype.toExponential`);
+  - output verification: the JVM parses the emitted module with Closure
+    Compiler and walks the AST; Node has no parser API, so the cljs branch runs
+    `node --check` for syntax and scans tokens outside string literals for the
+    same forbidden globals, properties, and import forms. The token scan is a
+    weaker instrument than the AST walk and says so in its failure data."
+  (:require [clojure.string :as str]
+            #?@(:cljs [["node:child_process" :as child-process]
+                       ["node:fs" :as node-fs]
+                       ["node:os" :as node-os]
+                       ["node:path" :as node-path]]))
+  #?(:clj (:import [com.google.javascript.jscomp CompilerOptions SourceFile]
+                   [com.google.javascript.jscomp CompilerOptions$LanguageMode]
+                   [com.google.javascript.rhino Node])))
 
 (def artifact-schema "kotoba-js-artifact/v1")
 (def floating-point-policy "ieee-754-f32-f64-v7")
@@ -148,30 +168,102 @@
 (defn- fail! [message data]
   (throw (ex-info message (assoc data :phase :kotoba-script))))
 
+(defn- int-literal?
+  "A KIR integer literal. On the JVM that is any `integer?`; on cljs the
+  frontend lowers i64 to BigInt, and a hand-built KIR may still carry a plain
+  JS integer."
+  [n]
+  #?(:clj (integer? n)
+     :cljs (or (and (some? n) (identical? js/BigInt (.-constructor n)))
+               (and (number? n) (js/Number.isInteger n)))))
+
+(defn- int-value
+  "The host number for an integer literal, for indexing and range checks.
+  Only ever applied to literals that passed `int-literal?` and are far below
+  2^53 (indexes, shift counts, capability ids)."
+  [n]
+  #?(:clj n
+     :cljs (if (and (some? n) (identical? js/BigInt (.-constructor n))) (js/Number n) n)))
+
+(defn- f64-value?
+  "A KIR f64 literal. The nbb frontend never produces one -- it lowers f64 to
+  `(f64-from-bits <bits>)` -- so on cljs this only fires for hand-built KIR,
+  where a whole-number double (`2.0`) is indistinguishable from an integer and
+  is read as i64."
+  [n]
+  #?(:clj (instance? Double n)
+     :cljs (and (number? n) (not (js/Number.isInteger n)))))
+
+#?(:cljs
+   (def ^:private letter-or-digit-re (js/RegExp. "^[\\p{L}\\p{Nd}]$" "u")))
+
+(defn- letter-or-digit?
+  "`Character/isLetterOrDigit` on a UTF-16 unit: Unicode letters plus DECIMAL
+  digits (Nd), which is what the JVM predicate means by digit."
+  [ch]
+  #?(:clj (Character/isLetterOrDigit ^char ch)
+     :cljs (.test letter-or-digit-re ch)))
+
+(defn- hex4
+  "Lower-case hex, zero-padded to four digits, of a UTF-16 unit."
+  [code]
+  (let [s #?(:clj (Integer/toHexString (int code)) :cljs (.toString code 16))]
+    (str (subs "0000" (count s)) s)))
+
+#?(:cljs
+   (defn java-double-string
+     "`Double.toString` for a finite non-zero double, from JS shortest digits.
+     JDK 19+ prints the shortest digit string that round-trips, which is the
+     same digit string `Number.prototype.toExponential()` produces; only the
+     layout differs: decimal notation when 1e-3 <= |d| < 1e7, otherwise
+     `d.dddE<exp>`, and always at least one fractional digit."
+     [n]
+     (let [negative? (neg? n)
+           a (js/Math.abs n)
+           [mantissa e] (str/split (.toExponential a) #"e")
+           digits (str/replace mantissa "." "")
+           exp (js/parseInt e 10)]
+       (str (when negative? "-")
+            (cond
+              (zero? a) "0.0"
+              ;; JDK keeps the pre-19 spelling of Double.MIN_VALUE (javadoc:
+              ;; "4.9E-324") although the shortest digit string is 5.0E-324.
+              (= a js/Number.MIN_VALUE) "4.9E-324"
+              (and (>= a 1e-3) (< a 1e7))
+              (let [point (inc exp)]
+                (cond
+                  (<= point 0) (str "0." (apply str (repeat (- point) "0")) digits)
+                  (>= point (count digits)) (str digits (apply str (repeat (- point (count digits)) "0")) ".0")
+                  :else (str (subs digits 0 point) "." (subs digits point))))
+              :else (str (first digits) "."
+                         (if (> (count digits) 1) (subs digits 1) "0")
+                         "E" exp))))))
+
 (defn- js-name [x]
   (let [s (str x)]
     (str "k$"
          (apply str
                 (mapcat (fn [ch]
-                          (if (or (Character/isLetterOrDigit ^char ch) (= ch \_))
+                          (if (or (letter-or-digit? ch) (= ch \_))
                             [(str ch)]
-                            [(str "$" (format "%04x" (int ch)))]))
+                            [(str "$" (hex4 #?(:clj (int ch) :cljs (.charCodeAt ch 0))))]))
                         s)))))
 
 (defn- bigint-literal [n]
-  (when-not (integer? n)
+  (when-not (int-literal? n)
     (fail! "KIR literal is not an integer" {:node n}))
   (str n "n"))
 
 (defn- f64-literal [n]
-  (when-not (instance? Double n)
+  (when-not (f64-value? n)
     (fail! "KIR literal is not f64" {:node n}))
   (cond
-    (Double/isNaN n) "Number.NaN"
-    (= Double/POSITIVE_INFINITY n) "Number.POSITIVE_INFINITY"
-    (= Double/NEGATIVE_INFINITY n) "Number.NEGATIVE_INFINITY"
-    (= Long/MIN_VALUE (Double/doubleToRawLongBits n)) "-0"
-    :else (Double/toString n)))
+    #?(:clj (Double/isNaN n) :cljs (js/Number.isNaN n)) "Number.NaN"
+    (= #?(:clj Double/POSITIVE_INFINITY :cljs js/Number.POSITIVE_INFINITY) n) "Number.POSITIVE_INFINITY"
+    (= #?(:clj Double/NEGATIVE_INFINITY :cljs js/Number.NEGATIVE_INFINITY) n) "Number.NEGATIVE_INFINITY"
+    #?(:clj (= Long/MIN_VALUE (Double/doubleToRawLongBits n))
+       :cljs (and (zero? n) (neg? (/ 1 n)))) "-0"
+    :else #?(:clj (Double/toString n) :cljs (java-double-string n))))
 
 (defn- js-string [value]
   (if (string? value) (pr-str value) "null"))
@@ -256,13 +348,13 @@
   (loop [index 0 total 0]
     (if (= index (count value))
       total
-      (let [unit (int (.charAt value index))]
+      (let [unit #?(:clj (int (.charAt value index)) :cljs (.charCodeAt value index))]
         (cond
           (<= unit 0x7f) (recur (inc index) (inc total))
           (<= unit 0x7ff) (recur (inc index) (+ total 2))
           (<= 0xd800 unit 0xdbff)
           (if (< (inc index) (count value))
-            (let [next-unit (int (.charAt value (inc index)))]
+            (let [next-unit #?(:clj (int (.charAt value (inc index))) :cljs (.charCodeAt value (inc index)))]
               (if (<= 0xdc00 next-unit 0xdfff)
                 (recur (+ index 2) (+ total 4))
                 (fail! "KIR string contains an unpaired high surrogate" {:index index})))
@@ -302,8 +394,9 @@
                        result-type (cond typed?          result
                                          (= :bool result) :bool
                                          :else            :i64)
-                       closure-indexes (:closure-param-indexes function)
-                       pair-chain-indexes (:i64-pair-chain-param-indexes function)
+                       host-indexes (fn [v] (if (and (vector? v) (every? int-literal? v)) (mapv int-value v) v))
+                       closure-indexes (host-indexes (:closure-param-indexes function))
+                       pair-chain-indexes (host-indexes (:i64-pair-chain-param-indexes function))
                        closure-result? (:closure-result? function)
                        closure-indexes-valid?
                        (or (not (contains? function :closure-param-indexes))
@@ -311,7 +404,7 @@
                                 (vector? closure-indexes)
                                 (= closure-indexes
                                    (vec (sort (distinct closure-indexes))))
-                                (every? #(and (integer? %) (<= 0 %)
+                                (every? #(and (int-literal? %) (<= 0 %)
                                               (< % (count params))
                                               (= :i64 (nth types % nil)))
                                         closure-indexes)))
@@ -322,7 +415,7 @@
                                 (= pair-chain-indexes
                                    (vec (sort (distinct pair-chain-indexes))))
                                 (not-any? (set closure-indexes) pair-chain-indexes)
-                                (every? #(and (integer? %) (<= 0 %)
+                                (every? #(and (int-literal? %) (<= 0 %)
                                               (< % (count params))
                                               (= :i64 (nth types % nil)))
                                         pair-chain-indexes)))
@@ -380,7 +473,7 @@
 (defn- infer-call-type [op args env signatures]
   (if (= op 'typed-cap-call)
     (do (require-arity! op args 4)
-        (when-not (integer? (first args))
+        (when-not (int-literal? (first args))
           (fail! "typed-cap-call capability id must be an integer literal"
                  {:id (first args)}))
         (validate-value-type! (nth args 1))
@@ -406,7 +499,7 @@
       (contains? '#{i32-shift-left i32-shift-right u32-shift-right} op)
       (do (require-arity! op args 2)
           (require-type! (first types) :i64 (first args))
-          (when-not (and (integer? (second args)) (<= 0 (second args) 31))
+          (when-not (and (int-literal? (second args)) (<= 0 (int-value (second args)) 31))
             (fail! "i32 shift count must be an integer literal in [0,31]"
                    {:operation op :count (second args)}))
           :i64)
@@ -903,8 +996,8 @@
 
 (defn- infer-type [form env signatures]
   (cond
-    (integer? form) :i64
-    (instance? Double form) :f64
+    (int-literal? form) :i64
+    (f64-value? form) :f64
     (string? form)
     (let [bytes (utf8-byte-count form)]
       (when (> bytes max-string-literal-bytes)
@@ -1114,10 +1207,11 @@
           :i64)
         hetero-vector-at
         (let [[type value index] args
+              index (if (int-literal? index) (int-value index) index)
               item-types (when (heterogeneous-vector-type? type) (second type))]
           (require-arity! op args 3)
           (validate-value-type! type)
-          (when-not (and (heterogeneous-vector-type? type) (integer? index)
+          (when-not (and (heterogeneous-vector-type? type) (int-literal? index)
                          (<= 0 index) (< index (count item-types)))
             (fail! "heterogeneous vector index must be an in-range integer literal"
                    {:type type :index index}))
@@ -1125,10 +1219,11 @@
           (nth item-types index))
         hetero-vector-assoc
         (let [[type value index item] args
+              index (if (int-literal? index) (int-value index) index)
               item-types (when (heterogeneous-vector-type? type) (second type))]
           (require-arity! op args 4)
           (validate-value-type! type)
-          (when-not (and (heterogeneous-vector-type? type) (integer? index)
+          (when-not (and (heterogeneous-vector-type? type) (int-literal? index)
                          (<= 0 index) (< index (count item-types)))
             (fail! "heterogeneous vector index must be an in-range integer literal"
                    {:type type :index index}))
@@ -1682,8 +1777,8 @@
    (emit-expr form env functions (volatile! 0)))
   ([form env functions counter]
    (cond
-     (integer? form) (bigint-literal form)
-     (instance? Double form) (f64-literal form)
+     (int-literal? form) (bigint-literal form)
+     (f64-value? form) (f64-literal form)
      (string? form) (js-string form)
      (keyword? form) (js-string (keyword-text form))
      (boolean? form) (if form "true" "false")
@@ -1725,11 +1820,13 @@
          (emit-call op args env functions counter)))
      :else (fail! "unsupported KIR node" {:node form}))))
 
+#?(:clj
 (defn- ast-nodes [^Node root]
   (tree-seq #(some? (.getFirstChild ^Node %))
             #(iterator-seq (.iterator (.children ^Node %)))
-            root))
+            root)))
 
+#?(:clj
 (defn- ast-problem [^Node node]
   (let [token (str (.getToken node))
         qname (when (.isGetProp node) (.getQualifiedName node))
@@ -1750,7 +1847,71 @@
       (or (= token "DYNAMIC_IMPORT") (.isImport node) (.isImportMeta node))
       {:kind :dynamic-import}
 
-      :else nil)))
+      :else nil))))
+
+#?(:cljs
+   (defn- strip-string-literals
+     "The module text with every '...' / \"...\" / `...` literal replaced by an
+     empty literal, so a token scan sees code, not data. The emitter's own
+     error codes live in string literals; scanning them was the false positive
+     the JVM's AST walk was introduced to avoid."
+     [source]
+     (loop [i 0 out [] n (count source)]
+       (if (>= i n)
+         (apply str out)
+         (let [c (.charAt source i)]
+           (if (or (= c "'") (= c "\"") (= c "`"))
+             (let [close (loop [j (inc i)]
+                           (cond (>= j n) n
+                                 (= (.charAt source j) "\\") (recur (+ j 2))
+                                 (= (.charAt source j) c) j
+                                 :else (recur (inc j))))]
+               (recur (inc close) (conj out c c) n))
+             (recur (inc i) (conj out c) n)))))))
+
+#?(:cljs
+   (defn- token-problem
+     "The cljs stand-in for `ast-problem`: the same three refusals, found by
+     regular expressions over the literal-stripped module text."
+     [code]
+     (let [ident-re (js/RegExp. "(^|[^A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)" "g")
+           globals (loop [m (.exec ident-re code) found nil]
+                     (cond found found
+                           (nil? m) nil
+                           :else (recur (.exec ident-re code)
+                                        (when (contains? forbidden-global-names (aget m 2)) (aget m 2)))))
+           prop-re (js/RegExp. "(?:\\.\\s*([A-Za-z_$][A-Za-z0-9_$]*))|(?:\\[\\s*(['\"])([A-Za-z_$][A-Za-z0-9_$]*)\\2\\s*\\])" "g")
+           property (loop [m (.exec prop-re code) found nil]
+                      (cond found found
+                            (nil? m) nil
+                            :else (recur (.exec prop-re code)
+                                         (let [p (or (aget m 1) (aget m 3))]
+                                           (when (contains? forbidden-properties p) p)))))]
+       (cond
+         globals {:kind :ambient-global :name globals}
+         property {:kind :forbidden-property :property property}
+         (re-find #"(^|[^A-Za-z0-9_$])import\s*[(.]" code) {:kind :dynamic-import}
+         (re-find #"(^|[^A-Za-z0-9_$])import\s+[A-Za-z_${*\"']" code) {:kind :dynamic-import}
+         :else nil))))
+
+#?(:cljs
+   (defn- node-syntax-check!
+     "`node --check` on the module written to a private temp file. Syntax is
+     the half of the JVM verifier a token scan cannot do at all."
+     [source]
+     (let [dir (.mkdtempSync node-fs (.join node-path (.tmpdir node-os) "kotoba-script-"))
+           file (.join node-path dir "generated.mjs")]
+       (try
+         (.writeFileSync node-fs file source "utf8")
+         (let [result (.spawnSync child-process (.-execPath js/process)
+                                  #js ["--check" file]
+                                  #js {:encoding "utf8" :timeout 60000})]
+           (when (or (.-error result) (not= 0 (.-status result)))
+             (fail! "generated JavaScript failed syntax check"
+                    {:errors [(str (or (some-> (.-error result) .-message) (.-stderr result)))]
+                     :verifier :node-check})))
+         (finally
+           (.rmSync node-fs dir #js {:recursive true :force true}))))))
 
 (defn verify-output!
   "Parse generated JavaScript and fail closed on ambient-authority AST nodes.
@@ -1759,6 +1920,12 @@
   [source]
   (when-not (string? source)
     (fail! "generated output is not text" {}))
+  #?(:cljs
+     (do (node-syntax-check! source)
+         (when-let [problem (token-problem (strip-string-literals source))]
+           (fail! "generated JavaScript violates restricted subset (token scan)"
+                  (assoc problem :verifier :token-scan))))
+     :clj
   (let [compiler (com.google.javascript.jscomp.Compiler.)
         options (doto (CompilerOptions.)
                   (.setLanguageIn CompilerOptions$LanguageMode/ECMASCRIPT_NEXT)
@@ -1773,15 +1940,15 @@
     ;; Compiler root is ROOT(EXTERNS_ROOT, JS_ROOT); inspect only authored JS.
     (when-let [problem (some ast-problem
                              (ast-nodes (.getLastChild (.getRoot compiler))))]
-      (fail! "generated JavaScript AST violates restricted subset" problem)))
+      (fail! "generated JavaScript AST violates restricted subset" problem))))
   source)
 
 (defn- capability-ids [kir]
   (->> (:effects kir)
        (keep (fn [effect]
                (when (and (vector? effect) (= :cap/call (first effect))
-                          (integer? (second effect)))
-                 (second effect))))
+                          (int-literal? (second effect)))
+                 (int-value (second effect)))))
        sort vec))
 
 (defn- sha256? [value]
