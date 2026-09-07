@@ -19,19 +19,28 @@ with reader conditionals in the source:
 
 | seam | JVM | nbb/Node |
 |---|---|---|
-| integer literals | `integer?` | BigInt (the nbb frontend lowers i64 to BigInt) or a plain JS integer in hand-built KIR |
+| integer literals | `integer?` | BigInt (the nbb frontend lowers i64 to BigInt) or a plain JS integer in hand-built KIR; JS `-0` is never an integer literal and reads as the f64 `-0.0` |
 | f64 literal text | `Double.toString` | `java-double-string`, JDK 19+ shortest-digit layout rebuilt from `Number.prototype.toExponential` (incl. the `4.9E-324` spelling of `MIN_VALUE`) |
 | output verification | Closure Compiler AST walk | `node --check` for syntax + a token scan outside string literals for the same forbidden globals / properties / import forms. Weaker than the AST walk; its failure data says `:verifier :token-scan` |
 
 A hand-built KIR on nbb cannot say `2.0` (a whole-number double reads as
-i64 there); the compiler route never needs to, because it lowers f64 to
-`(f64-from-bits …)`.
+i64 there; `-0.0` is the one exception); the compiler route never needs to,
+because it lowers f64 to `(f64-from-bits …)`. The golden fixtures therefore
+carry whole-number doubles as `#kotoba.parity/f64-bits "<hex>"`, which the
+parity test reads back into the exact double.
 
 ```bash
-clojure -M:test        # JVM suite (65 tests)
-npm run test-nbb       # nbb parity: emit bytes == JVM golden, Double.toString table, verifier refusals
+clojure -M:test        # JVM suite (66 tests, 229 assertions)
+npm run test-nbb       # nbb parity: emit bytes == JVM golden for 61 KIR fixtures, Double.toString table, verifier refusals
 clojure -M:golden      # regenerate test/fixtures/parity/ from the JVM emitter after an emitter change
 ```
+
+The golden set is every public var of `kotoba.script-test` whose value is a
+KIR map (61 fixtures, 3,588,034 bytes of emitted ESM at the last
+generation), so a new emitter path gets parity coverage by lifting its test
+fixture into a public `def`. A var with `^{:emit-opts {…}}` metadata is
+emitted with those options on both hosts (`<name>.opts.edn`). Fixtures whose
+emit is expected to throw stay `let`-bound inside their deftest.
 
 Generated modules expose `kotobaArtifact` and `instantiateKotoba(grants)`.
 They use no ambient browser/Node authority and execute capability effects only

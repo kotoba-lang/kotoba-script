@@ -58,15 +58,22 @@
     (is (str/includes? source "let fuel=512;"))
     (is (not (re-find ambient-access-pattern source)))))
 
+;; Every public var below whose value is a KIR map is exported by
+;; `scripts/gen-parity-golden.clj` as a JVM golden for `test/nbb/parity.cljs`
+;; (emit bytes must match on nbb). Fixtures whose emit is EXPECTED to throw
+;; stay `let`-bound inside their deftest so the generator never sees them.
+;; `^{:emit-opts …}` on a var carries the options the golden was emitted with.
+
+(def do-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['value 'traps] :effects #{}
+   :functions
+   [{:name 'value :params [] :param-types [] :result :string :effects #{}
+     :body '(do 1 (+ 1 1) "done")}
+    {:name 'traps :params [] :param-types [] :result :i64 :effects #{}
+     :body '(do (quot 1 0) 5)}]})
+
 (deftest do-emits-in-order-and-returns-its-last-value
-  (let [do-kir
-        {:format :kotoba.kir/v4 :entry nil :exports ['value 'traps] :effects #{}
-         :functions
-         [{:name 'value :params [] :param-types [] :result :string :effects #{}
-           :body '(do 1 (+ 1 1) "done")}
-          {:name 'traps :params [] :param-types [] :result :i64 :effects #{}
-           :body '(do (quot 1 0) 5)}]}
-        source (script/emit do-kir)
+  (let [source (script/emit do-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -78,21 +85,23 @@
     (is (str/includes? source "void (quot(1n,0n));return 5n;"))
     (is (= source (script/emit do-kir)))))
 
+(def closure-dispatcher-kir
+  {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
+   :functions
+   [{:name 'main :params [] :param-types [] :result :string :effects #{}
+     :body '(let [f (pair 1 0)]
+              (do 0 (__kotoba_invoke_string$arity1 f 123)))}
+    {:name '__kotoba_lambda_1_arity1 :params ['x] :param-types [:i64]
+     :result :string :effects #{} :body "done"}
+    {:name '__kotoba_invoke_string$arity1
+     :params ['__kotoba_closure_string_1 '__kotoba_invoke_arg_0]
+     :param-types [:i64 :i64] :result :string :effects #{}
+     :body '(if (= (pair-first __kotoba_closure_string_1) 1)
+              (__kotoba_lambda_1_arity1 __kotoba_invoke_arg_0)
+              (if (= (quot 1 0) 0) "" ""))}]})
+
 (deftest compiler-closure-dispatchers-guard-the-physical-pair-handle
-  (let [closure-kir
-        {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
-         :functions
-         [{:name 'main :params [] :param-types [] :result :string :effects #{}
-           :body '(let [f (pair 1 0)]
-                    (do 0 (__kotoba_invoke_string$arity1 f 123)))}
-          {:name '__kotoba_lambda_1_arity1 :params ['x] :param-types [:i64]
-           :result :string :effects #{} :body "done"}
-          {:name '__kotoba_invoke_string$arity1
-           :params ['__kotoba_closure_string_1 '__kotoba_invoke_arg_0]
-           :param-types [:i64 :i64] :result :string :effects #{}
-           :body '(if (= (pair-first __kotoba_closure_string_1) 1)
-                    (__kotoba_lambda_1_arity1 __kotoba_invoke_arg_0)
-                    (if (= (quot 1 0) 0) "" ""))}]}
+  (let [closure-kir closure-dispatcher-kir
         source (script/emit closure-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -106,17 +115,19 @@
                             "k$__kotoba_closure_string_1$1=assertI64(k$__kotoba_closure_string_1$1);")))
     (is (= source (script/emit closure-kir)))))
 
+(def closure-refinement-kir
+  {:format :kotoba.kir/v4 :entry 'main :exports ['main 'consume] :effects #{}
+   :functions
+   [{:name 'main :params [] :param-types [] :result :i64 :effects #{}
+     :body '(consume (make))}
+    {:name 'make :params [] :param-types [] :closure-result? true
+     :result :i64 :effects #{} :body '(pair 7 0)}
+    {:name 'consume :params ['f] :param-types [:i64]
+     :closure-param-indexes [0]
+     :result :i64 :effects #{} :body '(pair-first f)}]})
+
 (deftest closure-parameter-refinements-guard-nondispatcher-functions
-  (let [closure-kir
-        {:format :kotoba.kir/v4 :entry 'main :exports ['main 'consume] :effects #{}
-         :functions
-         [{:name 'main :params [] :param-types [] :result :i64 :effects #{}
-           :body '(consume (make))}
-          {:name 'make :params [] :param-types [] :closure-result? true
-           :result :i64 :effects #{} :body '(pair 7 0)}
-          {:name 'consume :params ['f] :param-types [:i64]
-           :closure-param-indexes [0]
-           :result :i64 :effects #{} :body '(pair-first f)}]}
+  (let [closure-kir closure-refinement-kir
         source (script/emit closure-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -161,15 +172,17 @@
          clojure.lang.ExceptionInfo #"KIR function type signature is invalid"
          (script/emit (assoc-in base [:functions 0 :result] :string))))))
 
+(def pair-chain-kir
+  {:format :kotoba.kir/v4 :entry 'main :exports ['main 'first-arg] :effects #{}
+   :functions
+   [{:name 'main :params [] :param-types [] :result :i64 :effects #{}
+     :body '(first-arg (pair 7 (pair 8 0)))}
+    {:name 'first-arg :params ['args] :param-types [:i64]
+     :i64-pair-chain-param-indexes [0]
+     :result :i64 :effects #{} :body '(pair-first args)}]})
+
 (deftest i64-pair-chain-parameter-refinements-are-checked
-  (let [program
-        {:format :kotoba.kir/v4 :entry 'main :exports ['main 'first-arg] :effects #{}
-         :functions
-         [{:name 'main :params [] :param-types [] :result :i64 :effects #{}
-           :body '(first-arg (pair 7 (pair 8 0)))}
-          {:name 'first-arg :params ['args] :param-types [:i64]
-           :i64-pair-chain-param-indexes [0]
-           :result :i64 :effects #{} :body '(pair-first args)}]}
+  (let [program pair-chain-kir
         source (script/emit program)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -215,18 +228,19 @@
                     "obj.fetchCount=2;" "let prefetch=3;"]]
       (is (not (re-find ambient-access-pattern benign)) (str "false positive: " benign)))))
 
+(def shadow-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['shadow 'sequential 'nested]
+   :effects #{}
+   :functions
+   [{:name 'shadow :params ['y] :param-types [:i64] :result :i64 :effects #{}
+     :body '(let [y (if (< y 0) (- y) y)] y)}
+    {:name 'sequential :params ['x] :param-types [:i64] :result :i64 :effects #{}
+     :body '(let [x (+ x 1) y (+ x 1) x (+ y 1)] x)}
+    {:name 'nested :params ['x] :param-types [:i64] :result :i64 :effects #{}
+     :body '(let [x (+ x 1)] (let [x (+ x 1)] x))}]})
+
 (deftest lexical-bindings-have-unique-js-names
-  (let [shadow-kir
-        {:format :kotoba.kir/v4 :entry nil :exports ['shadow 'sequential 'nested]
-         :effects #{}
-         :functions
-         [{:name 'shadow :params ['y] :param-types [:i64] :result :i64 :effects #{}
-           :body '(let [y (if (< y 0) (- y) y)] y)}
-          {:name 'sequential :params ['x] :param-types [:i64] :result :i64 :effects #{}
-           :body '(let [x (+ x 1) y (+ x 1) x (+ y 1)] x)}
-          {:name 'nested :params ['x] :param-types [:i64] :result :i64 :effects #{}
-           :body '(let [x (+ x 1)] (let [x (+ x 1)] x))}]}
-        source (script/emit shadow-kir)
+  (let [source (script/emit shadow-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -239,7 +253,7 @@
     (is (str/includes? source "const k$y$2="))
     (is (= source (script/emit shadow-kir)))))
 
-(deftest i32-wrapping-shift-and-xorshift-profile-is-explicit
+(def i32-profile-kir
   (let [functions
         (mapv (fn [[name params body]]
                 {:name name :params params :param-types (vec (repeat (count params) :i64))
@@ -252,10 +266,13 @@
                ['shl ['x] '(i32-shift-left x 31)]
                ['shr ['x] '(i32-shift-right x 31)]
                ['ushr ['x] '(u32-shift-right x 1)]
-               ['next ['x] '(xorshift32 x)]])
-        source (script/emit {:format :kotoba.kir/v4 :entry nil
-                             :exports (mapv :name functions) :effects #{}
-                             :functions functions})
+               ['next ['x] '(xorshift32 x)]])]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports (mapv :name functions) :effects #{}
+     :functions functions}))
+
+(deftest i32-wrapping-shift-and-xorshift-profile-is-explicit
+  (let [source (script/emit i32-profile-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -277,23 +294,24 @@
                                          :result :i64 :effects #{}
                                          :body (list 'i32-shift-left 'x count)}]})))))
 
+(def f64-bits-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['bits 'from-bits 'negative-zero 'infinity 'nan-bits]
+   :effects #{}
+   :functions
+   [{:name 'bits :params ['value] :param-types [:f64]
+     :result :i64 :effects #{} :body '(f64-to-bits value)}
+    {:name 'from-bits :params ['value] :param-types [:i64]
+     :result :f64 :effects #{} :body '(f64-from-bits value)}
+    {:name 'negative-zero :params [] :param-types []
+     :result :f64 :effects #{} :body -0.0}
+    {:name 'infinity :params [] :param-types []
+     :result :f64 :effects #{} :body Double/POSITIVE_INFINITY}
+    {:name 'nan-bits :params [] :param-types []
+     :result :i64 :effects #{} :body '(f64-to-bits ##NaN)}]})
+
 (deftest floating-point-f64-bit-profile-is-explicit-and-sealed
-  (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil
-         :exports ['bits 'from-bits 'negative-zero 'infinity 'nan-bits]
-         :effects #{}
-         :functions
-         [{:name 'bits :params ['value] :param-types [:f64]
-           :result :i64 :effects #{} :body '(f64-to-bits value)}
-          {:name 'from-bits :params ['value] :param-types [:i64]
-           :result :f64 :effects #{} :body '(f64-from-bits value)}
-          {:name 'negative-zero :params [] :param-types []
-           :result :f64 :effects #{} :body -0.0}
-          {:name 'infinity :params [] :param-types []
-           :result :f64 :effects #{} :body Double/POSITIVE_INFINITY}
-          {:name 'nan-bits :params [] :param-types []
-           :result :i64 :effects #{} :body '(f64-to-bits ##NaN)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit f64-bits-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -316,30 +334,31 @@
                           :functions [{:name 'bad :params ['x] :param-types [:f64]
                                        :result :i64 :effects #{} :body 'x}]}))))
 
+(def f64-arithmetic-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['add 'divide 'neg 'absolute 'equal 'less 'unordered 'nan-bits]
+   :effects #{}
+   :functions
+   [{:name 'add :params ['x 'y] :param-types [:f64 :f64]
+     :result :f64 :effects #{} :body '(f64-add x y)}
+    {:name 'divide :params ['x 'y] :param-types [:f64 :f64]
+     :result :f64 :effects #{} :body '(f64-div x y)}
+    {:name 'neg :params ['x] :param-types [:f64]
+     :result :f64 :effects #{} :body '(f64-neg x)}
+    {:name 'absolute :params ['x] :param-types [:f64]
+     :result :f64 :effects #{} :body '(f64-abs x)}
+    {:name 'equal :params ['x 'y] :param-types [:f64 :f64]
+     :result :bool :effects #{} :body '(f64-eq x y)}
+    {:name 'less :params ['x 'y] :param-types [:f64 :f64]
+     :result :bool :effects #{} :body '(f64-lt x y)}
+    {:name 'unordered :params ['x 'y] :param-types [:f64 :f64]
+     :result :bool :effects #{} :body '(f64-unordered x y)}
+    {:name 'nan-bits :params [] :param-types []
+     :result :i64 :effects #{}
+     :body '(f64-to-bits (f64-div (f64-from-bits 0) (f64-from-bits 0)))}]})
+
 (deftest f64-arithmetic-has-explicit-ieee-special-value-semantics
-  (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil
-         :exports ['add 'divide 'neg 'absolute 'equal 'less 'unordered 'nan-bits]
-         :effects #{}
-         :functions
-         [{:name 'add :params ['x 'y] :param-types [:f64 :f64]
-           :result :f64 :effects #{} :body '(f64-add x y)}
-          {:name 'divide :params ['x 'y] :param-types [:f64 :f64]
-           :result :f64 :effects #{} :body '(f64-div x y)}
-          {:name 'neg :params ['x] :param-types [:f64]
-           :result :f64 :effects #{} :body '(f64-neg x)}
-          {:name 'absolute :params ['x] :param-types [:f64]
-           :result :f64 :effects #{} :body '(f64-abs x)}
-          {:name 'equal :params ['x 'y] :param-types [:f64 :f64]
-           :result :bool :effects #{} :body '(f64-eq x y)}
-          {:name 'less :params ['x 'y] :param-types [:f64 :f64]
-           :result :bool :effects #{} :body '(f64-lt x y)}
-          {:name 'unordered :params ['x 'y] :param-types [:f64 :f64]
-           :result :bool :effects #{} :body '(f64-unordered x y)}
-          {:name 'nan-bits :params [] :param-types []
-           :result :i64 :effects #{}
-           :body '(f64-to-bits (f64-div (f64-from-bits 0) (f64-from-bits 0)))}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit f64-arithmetic-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -363,21 +382,22 @@
            :functions [{:name 'value :params [] :param-types [] :result type
                         :effects #{} :body 0}]})))))
 
+(def f64-i64-conversion-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['to-f64 'rounded 'to-i64 'truncating]
+   :effects #{}
+   :functions
+   [{:name 'to-f64 :params ['x] :param-types [:i64]
+     :result :f64 :effects #{} :body '(i64-to-f64-checked x)}
+    {:name 'rounded :params ['x] :param-types [:i64]
+     :result :f64 :effects #{} :body '(i64-to-f64-rounded x)}
+    {:name 'to-i64 :params ['x] :param-types [:f64]
+     :result :i64 :effects #{} :body '(f64-to-i64-checked x)}
+    {:name 'truncating :params ['x] :param-types [:f64]
+     :result :i64 :effects #{} :body '(f64-to-i64-truncating x)}]})
+
 (deftest f64-i64-conversions-distinguish-exact-rounded-and-truncating
-  (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil
-         :exports ['to-f64 'rounded 'to-i64 'truncating]
-         :effects #{}
-         :functions
-         [{:name 'to-f64 :params ['x] :param-types [:i64]
-           :result :f64 :effects #{} :body '(i64-to-f64-checked x)}
-          {:name 'rounded :params ['x] :param-types [:i64]
-           :result :f64 :effects #{} :body '(i64-to-f64-rounded x)}
-          {:name 'to-i64 :params ['x] :param-types [:f64]
-           :result :i64 :effects #{} :body '(f64-to-i64-checked x)}
-          {:name 'truncating :params ['x] :param-types [:f64]
-           :result :i64 :effects #{} :body '(f64-to-i64-truncating x)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit f64-i64-conversion-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -394,36 +414,37 @@
                      "{try{x.truncating(v);process.exit(8)}catch(e){}}})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def f32-profile-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['from-bits 'bits 'rounded 'widen 'add 'divide 'unordered
+             'to-f32 'rounded-i64 'to-i64 'truncating]
+   :effects #{}
+   :functions
+   [{:name 'from-bits :params ['x] :param-types [:i64]
+     :result :f32 :effects #{} :body '(f32-from-bits x)}
+    {:name 'bits :params ['x] :param-types [:f32]
+     :result :i64 :effects #{} :body '(f32-to-bits x)}
+    {:name 'rounded :params ['x] :param-types [:f64]
+     :result :f32 :effects #{} :body '(f64-to-f32-rounded x)}
+    {:name 'widen :params ['x] :param-types [:f32]
+     :result :f64 :effects #{} :body '(f32-to-f64-exact x)}
+    {:name 'add :params ['x 'y] :param-types [:f32 :f32]
+     :result :f32 :effects #{} :body '(f32-add x y)}
+    {:name 'divide :params ['x 'y] :param-types [:f32 :f32]
+     :result :f32 :effects #{} :body '(f32-div x y)}
+    {:name 'unordered :params ['x 'y] :param-types [:f32 :f32]
+     :result :bool :effects #{} :body '(f32-unordered x y)}
+    {:name 'to-f32 :params ['x] :param-types [:i64]
+     :result :f32 :effects #{} :body '(i64-to-f32-checked x)}
+    {:name 'rounded-i64 :params ['x] :param-types [:i64]
+     :result :f32 :effects #{} :body '(i64-to-f32-rounded x)}
+    {:name 'to-i64 :params ['x] :param-types [:f32]
+     :result :i64 :effects #{} :body '(f32-to-i64-checked x)}
+    {:name 'truncating :params ['x] :param-types [:f32]
+     :result :i64 :effects #{} :body '(f32-to-i64-truncating x)}]})
+
 (deftest f32-is-an-explicitly-rounded-scalar-profile
-  (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil
-         :exports ['from-bits 'bits 'rounded 'widen 'add 'divide 'unordered
-                   'to-f32 'rounded-i64 'to-i64 'truncating]
-         :effects #{}
-         :functions
-         [{:name 'from-bits :params ['x] :param-types [:i64]
-           :result :f32 :effects #{} :body '(f32-from-bits x)}
-          {:name 'bits :params ['x] :param-types [:f32]
-           :result :i64 :effects #{} :body '(f32-to-bits x)}
-          {:name 'rounded :params ['x] :param-types [:f64]
-           :result :f32 :effects #{} :body '(f64-to-f32-rounded x)}
-          {:name 'widen :params ['x] :param-types [:f32]
-           :result :f64 :effects #{} :body '(f32-to-f64-exact x)}
-          {:name 'add :params ['x 'y] :param-types [:f32 :f32]
-           :result :f32 :effects #{} :body '(f32-add x y)}
-          {:name 'divide :params ['x 'y] :param-types [:f32 :f32]
-           :result :f32 :effects #{} :body '(f32-div x y)}
-          {:name 'unordered :params ['x 'y] :param-types [:f32 :f32]
-           :result :bool :effects #{} :body '(f32-unordered x y)}
-          {:name 'to-f32 :params ['x] :param-types [:i64]
-           :result :f32 :effects #{} :body '(i64-to-f32-checked x)}
-          {:name 'rounded-i64 :params ['x] :param-types [:i64]
-           :result :f32 :effects #{} :body '(i64-to-f32-rounded x)}
-          {:name 'to-i64 :params ['x] :param-types [:f32]
-           :result :i64 :effects #{} :body '(f32-to-i64-checked x)}
-          {:name 'truncating :params ['x] :param-types [:f32]
-           :result :i64 :effects #{} :body '(f32-to-i64-truncating x)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit f32-profile-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -443,24 +464,26 @@
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def float-sqrt-min-max-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['f32-s 'f32-lo 'f32-hi 'f64-s 'f64-lo 'f64-hi]
+   :effects #{}
+   :functions
+   [{:name 'f32-s :params ['x] :param-types [:f32] :result :f32
+     :effects #{} :body '(f32-sqrt x)}
+    {:name 'f32-lo :params ['x 'y] :param-types [:f32 :f32] :result :f32
+     :effects #{} :body '(f32-min x y)}
+    {:name 'f32-hi :params ['x 'y] :param-types [:f32 :f32] :result :f32
+     :effects #{} :body '(f32-max x y)}
+    {:name 'f64-s :params ['x] :param-types [:f64] :result :f64
+     :effects #{} :body '(f64-sqrt x)}
+    {:name 'f64-lo :params ['x 'y] :param-types [:f64 :f64] :result :f64
+     :effects #{} :body '(f64-min x y)}
+    {:name 'f64-hi :params ['x 'y] :param-types [:f64 :f64] :result :f64
+     :effects #{} :body '(f64-max x y)}]})
+
 (deftest floating-sqrt-min-max-have-sealed-special-value-semantics
-  (let [kir {:format :kotoba.kir/v4 :entry nil
-             :exports ['f32-s 'f32-lo 'f32-hi 'f64-s 'f64-lo 'f64-hi]
-             :effects #{}
-             :functions
-             [{:name 'f32-s :params ['x] :param-types [:f32] :result :f32
-               :effects #{} :body '(f32-sqrt x)}
-              {:name 'f32-lo :params ['x 'y] :param-types [:f32 :f32] :result :f32
-               :effects #{} :body '(f32-min x y)}
-              {:name 'f32-hi :params ['x 'y] :param-types [:f32 :f32] :result :f32
-               :effects #{} :body '(f32-max x y)}
-              {:name 'f64-s :params ['x] :param-types [:f64] :result :f64
-               :effects #{} :body '(f64-sqrt x)}
-              {:name 'f64-lo :params ['x 'y] :param-types [:f64 :f64] :result :f64
-               :effects #{} :body '(f64-min x y)}
-              {:name 'f64-hi :params ['x 'y] :param-types [:f64 :f64] :result :f64
-               :effects #{} :body '(f64-max x y)}]}
-        source (script/emit kir)
+  (let [source (script/emit float-sqrt-min-max-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -474,14 +497,16 @@
                      "if(!Number.isNaN(x['f64-lo'](NaN,0))||!Number.isNaN(x['f64-hi'](0,NaN)))process.exit(7)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def quarter-turn-trig-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['sin 'cos] :effects #{}
+   :functions
+   [{:name 'sin :params ['x] :param-types [:f64] :result :f64
+     :effects #{} :body '(f64-sin-quarter-turn x)}
+    {:name 'cos :params ['x] :param-types [:f64] :result :f64
+     :effects #{} :body '(f64-cos-quarter-turn x)}]})
+
 (deftest bounded-trigonometry-has-a-deterministic-error-contract
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['sin 'cos] :effects #{}
-             :functions
-             [{:name 'sin :params ['x] :param-types [:f64] :result :f64
-               :effects #{} :body '(f64-sin-quarter-turn x)}
-              {:name 'cos :params ['x] :param-types [:f64] :result :f64
-               :effects #{} :body '(f64-cos-quarter-turn x)}]}
-        source (script/emit kir)
+  (let [source (script/emit quarter-turn-trig-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -497,14 +522,16 @@
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def bounded-trig-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['sin 'cos] :effects #{}
+   :functions
+   [{:name 'sin :params ['x] :param-types [:f64] :result :f64
+     :effects #{} :body '(f64-sin-bounded x)}
+    {:name 'cos :params ['x] :param-types [:f64] :result :f64
+     :effects #{} :body '(f64-cos-bounded x)}]})
+
 (deftest bounded-wide-angle-trigonometry-has-explicit-range-reduction
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['sin 'cos] :effects #{}
-             :functions
-             [{:name 'sin :params ['x] :param-types [:f64] :result :f64
-               :effects #{} :body '(f64-sin-bounded x)}
-              {:name 'cos :params ['x] :param-types [:f64] :result :f64
-               :effects #{} :body '(f64-cos-bounded x)}]}
-        source (script/emit kir)
+  (let [source (script/emit bounded-trig-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -521,14 +548,16 @@
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def near-zero-exp-log-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['exp 'log] :effects #{}
+   :functions
+   [{:name 'exp :params ['x] :param-types [:f64] :result :f64
+     :effects #{} :body '(f64-exp-near-zero x)}
+    {:name 'log :params ['x] :param-types [:f64] :result :f64
+     :effects #{} :body '(f64-log-near-one x)}]})
+
 (deftest bounded-exp-and-log-have-fixed-polynomial-contracts
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['exp 'log] :effects #{}
-             :functions
-             [{:name 'exp :params ['x] :param-types [:f64] :result :f64
-               :effects #{} :body '(f64-exp-near-zero x)}
-              {:name 'log :params ['x] :param-types [:f64] :result :f64
-               :effects #{} :body '(f64-log-near-one x)}]}
-        source (script/emit kir)
+  (let [source (script/emit near-zero-exp-log-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -546,11 +575,13 @@
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def atan2-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['atan2] :effects #{}
+   :functions [{:name 'atan2 :params ['y 'x] :param-types [:f64 :f64]
+                :result :f64 :effects #{} :body '(f64-atan2-bounded y x)}]})
+
 (deftest bounded-atan2-has-a-fixed-finite-domain-contract
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['atan2] :effects #{}
-             :functions [{:name 'atan2 :params ['y 'x] :param-types [:f64 :f64]
-                          :result :f64 :effects #{} :body '(f64-atan2-bounded y x)}]}
-        source (script/emit kir)
+  (let [source (script/emit atan2-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -564,13 +595,15 @@
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def wide-exp-log-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['exp 'log] :effects #{}
+   :functions [{:name 'exp :params ['x] :param-types [:f64] :result :f64
+                :effects #{} :body '(f64-exp-bounded x)}
+               {:name 'log :params ['x] :param-types [:f64] :result :f64
+                :effects #{} :body '(f64-log-bounded x)}]})
+
 (deftest wide-exp-and-log-use-fixed-binary-scaling
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['exp 'log] :effects #{}
-             :functions [{:name 'exp :params ['x] :param-types [:f64] :result :f64
-                          :effects #{} :body '(f64-exp-bounded x)}
-                         {:name 'log :params ['x] :param-types [:f64] :result :f64
-                          :effects #{} :body '(f64-log-bounded x)}]}
-        source (script/emit kir)
+  (let [source (script/emit wide-exp-log-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -588,18 +621,23 @@
                      ".catch(e=>{console.error(e.message);process.exit(99)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def cap-call-v3-kir
+  {:format :kotoba.kir/v3 :entry 'main
+   :effects #{[:cap/call 7]}
+   :functions [{:name 'main :params [] :body '(cap-call 7 4)}]})
+
 (deftest capabilities-fail-closed
-  (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main
-                             :effects #{[:cap/call 7]}
-                             :functions [{:name 'main :params [] :body '(cap-call 7 4)}]})]
+  (let [source (script/emit cap-call-v3-kir)]
     (is (re-find #"requiredCapabilities:Object.freeze\(\[7\]\)" source))
     (is (re-find #"capability-denied" source))))
 
+(def typed-cap-call-i64-kir
+  {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 7]}
+   :functions [{:name 'main :params [] :param-types [] :result :i64
+                :body '(typed-cap-call 7 :i64 :i64 0)}]})
+
 (deftest typed-cap-call-i64-hosts-as-call-capability
-  (let [kir {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 7]}
-             :functions [{:name 'main :params [] :param-types [] :result :i64
-                          :body '(typed-cap-call 7 :i64 :i64 0)}]}
-        source (script/emit kir)
+  (let [source (script/emit typed-cap-call-i64-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({7:(_v)=>99});"
@@ -608,23 +646,30 @@
     (is (str/includes? source "callCapability(7,"))
     (is (zero? (:exit result)) (:err result))))
 
-(deftest typed-cap-call-interns-host-document-and-variant-results
+(def typed-cap-call-variant-kir
   (let [request [:variant :kotoba.dataspace/request [[:facet-enter :bool] [:facet-leave :i64]]]
         result [:variant :kotoba.dataspace/result
                 [[:facet [:record :kotoba.dataspace/facet [[:id :i64]]]]
                  [:error [:record :kotoba.dataspace/error
-                          [[:code :keyword] [:message :string]]]]]]
-        kir {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 24]}
-             :functions [{:name 'main :params [] :param-types [] :result :i64
-                          :body (list 'let ['answer
-                                            (list 'typed-cap-call 24 request result
-                                                  (list 'variant-new request :facet-enter false))]
-                                      (list 'variant-match result 'answer
-                                            [[:facet 'f (list 'record-get
-                                                              [:record :kotoba.dataspace/facet [[:id :i64]]]
-                                                              'f :id)]
-                                             [:error 'e 0]]))}]}
-        source (script/emit kir)
+                          [[:code :keyword] [:message :string]]]]]]]
+    {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 24]}
+     :functions [{:name 'main :params [] :param-types [] :result :i64
+                  :body (list 'let ['answer
+                                    (list 'typed-cap-call 24 request result
+                                          (list 'variant-new request :facet-enter false))]
+                              (list 'variant-match result 'answer
+                                    [[:facet 'f (list 'record-get
+                                                      [:record :kotoba.dataspace/facet [[:id :i64]]]
+                                                      'f :id)]
+                                     [:error 'e 0]]))}]}))
+
+(def typed-cap-call-string-kir
+  {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 4]}
+   :functions [{:name 'main :params [] :param-types [] :result :string
+                :body '(typed-cap-call 4 :string :string "x")}]})
+
+(deftest typed-cap-call-interns-host-document-and-variant-results
+  (let [source (script/emit typed-cap-call-variant-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({24:(req,contract)=>{"
@@ -635,10 +680,7 @@
         probe (run-node "node" "--input-type=module" "-e" js)]
     (is (str/includes? source "callTypedCapability(24,"))
     (is (zero? (:exit probe)) (:err probe)))
-  (let [source (script/emit
-                {:format :kotoba.kir/v4 :entry 'main :effects #{[:cap/call 4]}
-                 :functions [{:name 'main :params [] :param-types [] :result :string
-                              :body '(typed-cap-call 4 :string :string "x")}]})
+  (let [source (script/emit typed-cap-call-string-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({4:(v)=>v+'!'});"
@@ -647,13 +689,18 @@
     (is (str/includes? source "callTypedCapability(4,"))
     (is (zero? (:exit probe)) (:err probe))))
 
+(def ^{:emit-opts {:module-graph-digest (apply str (repeat 64 "a"))
+                   :module-source-digests {'example.text (apply str (repeat 64 "b"))
+                                           'example.app (apply str (repeat 64 "c"))}}}
+  module-graph-kir
+  "`kir` emitted with module-graph identity options (see the var metadata)."
+  kir)
+
 (deftest module-graph-identity-is-frozen-into-the-esm-artifact
   (let [a (apply str (repeat 64 "a"))
         b (apply str (repeat 64 "b"))
         c (apply str (repeat 64 "c"))
-        source (script/emit kir {:module-graph-digest a
-                                 :module-source-digests
-                                 {'example.text b 'example.app c}})]
+        source (script/emit module-graph-kir (:emit-opts (meta #'module-graph-kir)))]
     (is (str/includes? source (str "moduleGraphDigest:\"" a "\"")))
     (is (re-find #"moduleSourceDigests:Object.freeze\(\{\"example.app\":" source))
     (is (< (.indexOf source "\"example.app\"") (.indexOf source "\"example.text\"")))
@@ -666,13 +713,18 @@
                           (script/emit kir {:module-graph-digest a
                                             :module-source-digests {"example.app" c}})))))
 
+(def ^{:emit-opts {:package-lock-digest (apply str (repeat 64 "a"))
+                   :trust-policy-digest (apply str (repeat 64 "b"))
+                   :package-receipt-digest (apply str (repeat 64 "c"))}}
+  supply-chain-kir
+  "`kir` emitted with supply-chain identity options (see the var metadata)."
+  kir)
+
 (deftest supply-chain-identity-is-frozen-into-the-esm-artifact
   (let [a (apply str (repeat 64 "a"))
         b (apply str (repeat 64 "b"))
         c (apply str (repeat 64 "c"))
-        source (script/emit kir {:package-lock-digest a
-                                 :trust-policy-digest b
-                                 :package-receipt-digest c})]
+        source (script/emit supply-chain-kir (:emit-opts (meta #'supply-chain-kir)))]
     (is (str/includes? source (str "packageLockDigest:\"" a "\"")))
     (is (str/includes? source (str "trustPolicyDigest:\"" b "\"")))
     (is (str/includes? source (str "packageReceiptDigest:\"" c "\"")))
@@ -683,17 +735,30 @@
                                             :trust-policy-digest "bad"
                                             :package-receipt-digest c})))))
 
+(def equality-v3-kir
+  {:format :kotoba.kir/v3 :entry 'main :effects #{}
+   :functions [{:name 'main :params [] :body '(= 1 2)}]})
+
+(def pair-equality-v3-kir
+  {:format :kotoba.kir/v3 :entry 'main :effects #{}
+   :functions [{:name 'main :params []
+                :body '(if (= (pair 1 0) 0) 1 2)}]})
+
+(def explicit-exports-kir (assoc kir :exports ['main]))
+
+(def library-kir
+  {:format :kotoba.kir/v3 :entry nil :exports ['add1]
+   :effects #{}
+   :functions [{:name 'add1 :params ['x] :body '(+ x 1)}]})
+
 (deftest equality-is-comparison-and-grants-are-exact
-  (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main :effects #{}
-                             :functions [{:name 'main :params [] :body '(= 1 2)}]})]
+  (let [source (script/emit equality-v3-kir)]
     (is (re-find #"valueEqual\(1n,2n\)" source))
     (is (not (re-find #"1n = 2n" source)))
     (is (re-find #"capability-grant-mismatch" source))))
 
 (deftest equality-between-pair-values-and-scalars-is-false
-  (let [source (script/emit {:format :kotoba.kir/v3 :entry 'main :effects #{}
-                             :functions [{:name 'main :params []
-                                          :body '(if (= (pair 1 0) 0) 1 2)}]})
+  (let [source (script/emit pair-equality-v3-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{if(m.instantiateKotoba({}).main()!==2n)process.exit(2)})")
@@ -701,7 +766,7 @@
     (is (zero? (:exit result)) (:err result))))
 
 (deftest explicit-exports-hide-internal-functions
-  (let [source (script/emit (assoc kir :exports ['main]))
+  (let [source (script/emit explicit-exports-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -713,9 +778,7 @@
                         (script/emit (assoc kir :exports ['missing])))))
 
 (deftest library-module-needs-exports-but-not-an-entry
-  (let [source (script/emit {:format :kotoba.kir/v3 :entry nil :exports ['add1]
-                             :effects #{}
-                             :functions [{:name 'add1 :params ['x] :body '(+ x 1)}]})
+  (let [source (script/emit library-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -727,16 +790,18 @@
                         (script/emit {:format :kotoba.kir/v3 :entry nil :exports []
                                       :effects #{} :functions []}))))
 
+(def bounded-strings-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['greet 'byte-length]
+   :effects #{}
+   :functions [{:name 'greet :params ['name] :param-types [:string]
+                :result :string :effects #{}
+                :body '(string-concat "こんにちは、" name)}
+               {:name 'byte-length :params ['value] :param-types [:string]
+                :result :i64 :effects #{}
+                :body '(string-byte-length value)}]})
+
 (deftest typed-bounded-strings-preserve-values-through-the-frozen-api
-  (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['greet 'byte-length]
-                   :effects #{}
-                   :functions [{:name 'greet :params ['name] :param-types [:string]
-                                :result :string :effects #{}
-                                :body '(string-concat "こんにちは、" name)}
-                               {:name 'byte-length :params ['value] :param-types [:string]
-                                :result :i64 :effects #{}
-                                :body '(string-byte-length value)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit bounded-strings-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -769,14 +834,16 @@
                                         :functions [{:name 'bad :params [] :param-types []
                                                      :result :string :effects #{} :body unpaired}]})))))
 
+(def string-replace-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['replace]
+   :effects #{}
+   :functions [{:name 'replace :params ['value 'needle 'replacement]
+                :param-types [:string :string :string]
+                :result :string :effects #{}
+                :body '(string-replace-all value needle replacement)}]})
+
 (deftest bounded-string-replacement-is-literal-and-fails-closed
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['replace]
-             :effects #{}
-             :functions [{:name 'replace :params ['value 'needle 'replacement]
-                          :param-types [:string :string :string]
-                          :result :string :effects #{}
-                          :body '(string-replace-all value needle replacement)}]}
-        source (script/emit kir)
+  (let [source (script/emit string-replace-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -795,20 +862,22 @@
                                        :param-types [:string] :result :string :effects #{}
                                        :body '(string-replace-all value 1 "x")}]}))))
 
+(def string-contains-fold-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['contains 'fold 'contains-fold]
+   :effects #{}
+   :functions [{:name 'contains :params ['haystack 'needle]
+                :param-types [:string :string] :result :bool :effects #{}
+                :body '(string-contains? haystack needle)}
+               {:name 'fold :params ['value] :param-types [:string]
+                :result :string :effects #{}
+                :body '(string-fold-case value)}
+               {:name 'contains-fold :params ['haystack 'needle]
+                :param-types [:string :string] :result :bool :effects #{}
+                :body '(string-contains? (string-fold-case haystack)
+                                         (string-fold-case needle))}]})
+
 (deftest bounded-string-contains-and-case-fold-compose-for-case-insensitive-search
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['contains 'fold 'contains-fold]
-             :effects #{}
-             :functions [{:name 'contains :params ['haystack 'needle]
-                          :param-types [:string :string] :result :bool :effects #{}
-                          :body '(string-contains? haystack needle)}
-                         {:name 'fold :params ['value] :param-types [:string]
-                          :result :string :effects #{}
-                          :body '(string-fold-case value)}
-                         {:name 'contains-fold :params ['haystack 'needle]
-                          :param-types [:string :string] :result :bool :effects #{}
-                          :body '(string-contains? (string-fold-case haystack)
-                                                   (string-fold-case needle))}]}
-        source (script/emit kir)
+  (let [source (script/emit string-contains-fold-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -829,13 +898,15 @@
     (is (str/includes? source "stringContains"))
     (is (str/includes? source "stringFoldCase")))
 
+(def string-code-point-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['cp]
+   :effects #{}
+   :functions [{:name 'cp :params ['s 'off]
+                :param-types [:string :i64] :result :i64 :effects #{}
+                :body '(string-code-point-at s off)}]})
+
 (deftest string-code-point-at-decodes-utf8-at-byte-offset
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['cp]
-             :effects #{}
-             :functions [{:name 'cp :params ['s 'off]
-                          :param-types [:string :i64] :result :i64 :effects #{}
-                          :body '(string-code-point-at s off)}]}
-        source (script/emit kir)
+  (let [source (script/emit string-code-point-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -866,16 +937,18 @@
                                        :param-types [:i64] :result :string :effects #{}
                                        :body '(string-fold-case value)}]}))))
 
+(def keywords-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['identity 'same?]
+   :effects #{}
+   :functions [{:name 'identity :params ['value] :param-types [:keyword]
+                :result :keyword :effects #{} :body 'value}
+               {:name 'same? :params ['left 'right]
+                :param-types [:keyword :keyword]
+                ;; profile 5: `=` is :bool
+                :result :bool :effects #{} :body '(= left right)}]})
+
 (deftest typed-keywords-preserve-canonical-text-without-hashing
-  (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['identity 'same?]
-                   :effects #{}
-                   :functions [{:name 'identity :params ['value] :param-types [:keyword]
-                                :result :keyword :effects #{} :body 'value}
-                               {:name 'same? :params ['left 'right]
-                                :param-types [:keyword :keyword]
-                                ;; profile 5: `=` is :bool
-                                :result :bool :effects #{} :body '(= left right)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit keywords-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -895,15 +968,17 @@
                           :functions [{:name 'bad :params [] :param-types []
                                        :result :bool :effects #{} :body '(= :a 1)}]}))))
 
+(def bounded-maps-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['lookup 'update]
+   :effects #{}
+   :functions [{:name 'lookup :params ['value] :param-types [:map]
+                :result :i64 :effects #{} :body '(map-get value :a 0)}
+               {:name 'update :params ['value] :param-types [:map]
+                :result :map :effects #{}
+                :body '(map-assoc value :b 2 :a 3)}]})
+
 (deftest typed-bounded-maps-use-canonical-persistent-keyword-entries
-  (let [typed-kir {:format :kotoba.kir/v4 :entry nil :exports ['lookup 'update]
-                   :effects #{}
-                   :functions [{:name 'lookup :params ['value] :param-types [:map]
-                                :result :i64 :effects #{} :body '(map-get value :a 0)}
-                               {:name 'update :params ['value] :param-types [:map]
-                                :result :map :effects #{}
-                                :body '(map-assoc value :b 2 :a 3)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit bounded-maps-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -917,23 +992,24 @@
     (is (str/includes? source "mapLimits:Object.freeze({entries:128})"))
     (is (str/includes? source "const makeMap="))))
 
+(def bool-option-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['negate 'present? 'with-default 'same-option?]
+   :effects #{}
+   :functions
+   [{:name 'negate :params ['value] :param-types [:bool]
+     :result :bool :effects #{} :body '(bool-not value)}
+    {:name 'present? :params ['value] :param-types [:option-i64]
+     :result :bool :effects #{} :body '(option-some? value)}
+    {:name 'with-default :params ['value] :param-types [:option-i64]
+     :result :i64 :effects #{} :body '(option-value value 9)}
+    {:name 'same-option? :params ['left 'right]
+     :param-types [:option-i64 :option-i64]
+     ;; profile 5: `=` is :bool
+     :result :bool :effects #{} :body '(= left right)}]})
+
 (deftest typed-booleans-and-options-never-use-js-truthiness-or-null-sentinels
-  (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil
-         :exports ['negate 'present? 'with-default 'same-option?]
-         :effects #{}
-         :functions
-         [{:name 'negate :params ['value] :param-types [:bool]
-           :result :bool :effects #{} :body '(bool-not value)}
-          {:name 'present? :params ['value] :param-types [:option-i64]
-           :result :bool :effects #{} :body '(option-some? value)}
-          {:name 'with-default :params ['value] :param-types [:option-i64]
-           :result :i64 :effects #{} :body '(option-value value 9)}
-          {:name 'same-option? :params ['left 'right]
-           :param-types [:option-i64 :option-i64]
-           ;; profile 5: `=` is :bool
-           :result :bool :effects #{} :body '(= left right)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit bool-option-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -957,22 +1033,23 @@
                                        :result :i64 :effects #{}
                                        :body '(= (option-none) false)}]}))))
 
+(def result-i64-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['ok? 'value 'error 'same?]
+   :effects #{}
+   :functions
+   [{:name 'ok? :params ['result] :param-types [:result-i64]
+     :result :bool :effects #{} :body '(result-ok? result)}
+    {:name 'value :params ['result 'fallback] :param-types [:result-i64 :i64]
+     :result :i64 :effects #{} :body '(result-value result fallback)}
+    {:name 'error :params ['result 'fallback] :param-types [:result-i64 :i64]
+     :result :i64 :effects #{} :body '(result-error result fallback)}
+    {:name 'same? :params ['left 'right] :param-types [:result-i64 :result-i64]
+     ;; profile 5: `=` is :bool
+     :result :bool :effects #{} :body '(= left right)}]})
+
 (deftest bounded-result-i64-has-closed-tags-payloads-and-lazy-fallbacks
-  (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil
-         :exports ['ok? 'value 'error 'same?]
-         :effects #{}
-         :functions
-         [{:name 'ok? :params ['result] :param-types [:result-i64]
-           :result :bool :effects #{} :body '(result-ok? result)}
-          {:name 'value :params ['result 'fallback] :param-types [:result-i64 :i64]
-           :result :i64 :effects #{} :body '(result-value result fallback)}
-          {:name 'error :params ['result 'fallback] :param-types [:result-i64 :i64]
-           :result :i64 :effects #{} :body '(result-error result fallback)}
-          {:name 'same? :params ['left 'right] :param-types [:result-i64 :result-i64]
-           ;; profile 5: `=` is :bool
-           :result :bool :effects #{} :body '(= left right)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit result-i64-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});const ok=[true,7n],err=[false,12n];"
@@ -987,24 +1064,26 @@
     (is (str/includes? source "resultProfile:'tagged-i64-i64-v1'"))
     (is (str/includes? source "const assertResultI64="))))
 
-(deftest parametric-result-validates-nested-payload-types-and-budgets
+(def parametric-result-kir
   (let [text-result [:result :string :i64]
-        nested-result [:result :string [:result :i64 :bool]]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['text 'nested 'nested-error?]
-             :effects #{}
-             :functions
-             [{:name 'text :params ['r] :param-types [text-result]
-               :result :string :effects #{}
-               :body (list 'result-value-of text-result 'r "fallback")}
-              {:name 'nested :params [] :param-types [] :result nested-result :effects #{}
-               :body (list 'result-err-of nested-result
-                           (list 'result-ok-of [:result :i64 :bool] 7))}
-              {:name 'nested-error? :params ['r] :param-types [nested-result]
-               :result :bool :effects #{}
-               :body (list 'result-ok?-of [:result :i64 :bool]
-                           (list 'result-error-of nested-result 'r
-                                 (list 'result-err-of [:result :i64 :bool] false)))}]}
-        source (script/emit kir)
+        nested-result [:result :string [:result :i64 :bool]]]
+    {:format :kotoba.kir/v4 :entry nil :exports ['text 'nested 'nested-error?]
+     :effects #{}
+     :functions
+     [{:name 'text :params ['r] :param-types [text-result]
+       :result :string :effects #{}
+       :body (list 'result-value-of text-result 'r "fallback")}
+      {:name 'nested :params [] :param-types [] :result nested-result :effects #{}
+       :body (list 'result-err-of nested-result
+                   (list 'result-ok-of [:result :i64 :bool] 7))}
+      {:name 'nested-error? :params ['r] :param-types [nested-result]
+       :result :bool :effects #{}
+       :body (list 'result-ok?-of [:result :i64 :bool]
+                   (list 'result-error-of nested-result 'r
+                         (list 'result-err-of [:result :i64 :bool] false)))}]}))
+
+(deftest parametric-result-validates-nested-payload-types-and-budgets
+  (let [source (script/emit parametric-result-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
@@ -1023,20 +1102,26 @@
                             :functions [{:name 'bad :params ['x] :param-types [too-deep]
                                          :result :bool :effects #{} :body true}]})))))
 
+(def ^:private result-match-type [:result :string :i64])
+
+(def result-match-kir
+  ;; i64-returning match: the executable half of `result-match-is-exhaustive-typed-and-lazy`.
+  {:format :kotoba.kir/v4 :entry nil :exports ['describe] :effects #{}
+   :functions
+   [{:name 'describe :params ['r] :param-types [result-match-type]
+     :result :i64 :effects #{}
+     :body (list 'result-match-of result-match-type 'r 'text
+                 '(string-byte-length text) 'code 'code)}]})
+
 (deftest result-match-is-exhaustive-typed-and-lazy
-  (let [type [:result :string :i64]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['describe] :effects #{}
-             :functions
-             [{:name 'describe :params ['r] :param-types [type]
-               :result :string :effects #{}
-               :body (list 'result-match-of type 'r 'text 'text 'code 'code)}]}
-        ;; Use an i64-returning match for executable behavior; the string body
-        ;; above separately proves binder typing without coercing error codes.
-        executable (assoc-in kir [:functions 0]
-                             {:name 'describe :params ['r] :param-types [type]
-                              :result :i64 :effects #{}
-                              :body (list 'result-match-of type 'r 'text
-                                          '(string-byte-length text) 'code 'code)})
+  (let [type result-match-type
+        ;; The string-bodied form is EXPECTED to throw (binder typing), so it
+        ;; stays let-bound and out of the golden set.
+        kir (assoc-in result-match-kir [:functions 0]
+                      {:name 'describe :params ['r] :param-types [type]
+                       :result :string :effects #{}
+                       :body (list 'result-match-of type 'r 'text 'text 'code 'code)})
+        executable result-match-kir
         source (script/emit executable)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1052,15 +1137,22 @@
                            (assoc-in executable [:functions 0 :body]
                                      (list 'result-match-of type 'r :bad 1 'code 'code)))))))
 
+(def ^:private variant-status-type [:variant :demo/status [[:ready :i64] [:failed :string]]])
+(def ^:private variant-status-branches
+  [[:ready 'n '(+ n 1)] [:failed 'message '(string-byte-length message)]])
+
+(def variant-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['ready 'describe] :effects #{}
+   :functions
+   [{:name 'ready :params [] :param-types [] :result variant-status-type :effects #{}
+     :body (list 'variant-new variant-status-type :ready 7)}
+    {:name 'describe :params ['value] :param-types [variant-status-type] :result :i64 :effects #{}
+     :body (list 'variant-match variant-status-type 'value variant-status-branches)}]})
+
 (deftest closed-variants-own-identity-payloads-and-exhaustive-matches
-  (let [type [:variant :demo/status [[:ready :i64] [:failed :string]]]
-        branches [[:ready 'n '(+ n 1)] [:failed 'message '(string-byte-length message)]]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['ready 'describe] :effects #{}
-             :functions
-             [{:name 'ready :params [] :param-types [] :result type :effects #{}
-               :body (list 'variant-new type :ready 7)}
-              {:name 'describe :params ['value] :param-types [type] :result :i64 :effects #{}
-               :body (list 'variant-match type 'value branches)}]}
+  (let [type variant-status-type
+        branches variant-status-branches
+        kir variant-kir
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1085,16 +1177,20 @@
                                        :result [:variant :status [[:ready :i64]]]
                                        :effects #{} :body 0}]}))))
 
+(def generic-option-kir
+  (let [type [:option :string]]
+    {:format :kotoba.kir/v4 :entry nil :exports ['some 'none 'describe] :effects #{}
+     :functions
+     [{:name 'some :params [] :param-types [] :result type :effects #{}
+       :body (list 'option-some-of type "安全")}
+      {:name 'none :params [] :param-types [] :result type :effects #{}
+       :body (list 'option-none-of type)}
+      {:name 'describe :params ['value] :param-types [type] :result :i64 :effects #{}
+       :body (list 'option-match type 'value 7 'text '(string-byte-length text))}]}))
+
 (deftest generic-options-preserve-none-type-identity-and-exhaustive-matching
   (let [type [:option :string]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['some 'none 'describe] :effects #{}
-             :functions
-             [{:name 'some :params [] :param-types [] :result type :effects #{}
-               :body (list 'option-some-of type "安全")}
-              {:name 'none :params [] :param-types [] :result type :effects #{}
-               :body (list 'option-none-of type)}
-              {:name 'describe :params ['value] :param-types [type] :result :i64 :effects #{}
-               :body (list 'option-match type 'value 7 'text '(string-byte-length text))}]}
+        kir generic-option-kir
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1111,22 +1207,47 @@
                           (assoc-in kir [:functions 2 :body]
                                      (list 'option-match type 'value 7 'text 'text)))))))
 
+(def hetero-vector-kir
+  (let [type [:vector [:i64 :string :bool]]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports ['make 'name 'rename 'count-items 'same?] :effects #{}
+     :functions
+     [{:name 'make :params [] :param-types [] :result type :effects #{}
+       :body (list 'hetero-vector-new type 7 "安全" true)}
+      {:name 'name :params ['value] :param-types [type] :result :string :effects #{}
+       :body (list 'hetero-vector-at type 'value 1)}
+      {:name 'rename :params ['value] :param-types [type] :result type :effects #{}
+       :body (list 'hetero-vector-assoc type 'value 1 "確認")}
+      {:name 'count-items :params ['value] :param-types [type] :result :i64 :effects #{}
+       :body (list 'hetero-vector-count type 'value)}
+      {:name 'same? :params ['left 'right] :param-types [type type]
+       :result :i64 :effects #{}
+       :body (list 'hetero-vector-equal type 'left 'right)}]}))
+
+(def structured-f64-kir
+  (let [vector-type [:vector [:f64 :f64]]
+        record-type [:record :geometry/point [[:x :f64] [:y :f64]]]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports ['make-vector 'vector-x 'make-point 'point-y 'move-x]
+     :effects #{}
+     :functions
+     [{:name 'make-vector :params [] :param-types [] :result vector-type :effects #{}
+       :body (list 'hetero-vector-new vector-type -0.0 ##NaN)}
+      {:name 'vector-x :params ['value] :param-types [vector-type]
+       :result :f64 :effects #{}
+       :body (list 'hetero-vector-at vector-type 'value 0)}
+      {:name 'make-point :params [] :param-types [] :result record-type :effects #{}
+       :body (list 'record-new record-type 1.25 -0.0)}
+      {:name 'point-y :params ['value] :param-types [record-type]
+       :result :f64 :effects #{}
+       :body (list 'record-get record-type 'value :y)}
+      {:name 'move-x :params ['value 'x] :param-types [record-type :f64]
+       :result record-type :effects #{}
+       :body (list 'record-assoc record-type 'value :x 'x)}]}))
+
 (deftest heterogeneous-vectors-seal-position-types-and-exact-length
   (let [type [:vector [:i64 :string :bool]]
-        kir {:format :kotoba.kir/v4 :entry nil
-             :exports ['make 'name 'rename 'count-items 'same?] :effects #{}
-             :functions
-             [{:name 'make :params [] :param-types [] :result type :effects #{}
-               :body (list 'hetero-vector-new type 7 "安全" true)}
-              {:name 'name :params ['value] :param-types [type] :result :string :effects #{}
-               :body (list 'hetero-vector-at type 'value 1)}
-              {:name 'rename :params ['value] :param-types [type] :result type :effects #{}
-               :body (list 'hetero-vector-assoc type 'value 1 "確認")}
-              {:name 'count-items :params ['value] :param-types [type] :result :i64 :effects #{}
-               :body (list 'hetero-vector-count type 'value)}
-              {:name 'same? :params ['left 'right] :param-types [type type]
-               :result :i64 :effects #{}
-               :body (list 'hetero-vector-equal type 'left 'right)}]}
+        kir hetero-vector-kir
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1147,26 +1268,7 @@
                                                  (list 'hetero-vector-new type 7 "安全")))))
 
 (deftest structured-f64-values-preserve-nan-and-signed-zero
-  (let [vector-type [:vector [:f64 :f64]]
-        record-type [:record :geometry/point [[:x :f64] [:y :f64]]]
-        kir {:format :kotoba.kir/v4 :entry nil
-             :exports ['make-vector 'vector-x 'make-point 'point-y 'move-x]
-             :effects #{}
-             :functions
-             [{:name 'make-vector :params [] :param-types [] :result vector-type :effects #{}
-               :body (list 'hetero-vector-new vector-type -0.0 ##NaN)}
-              {:name 'vector-x :params ['value] :param-types [vector-type]
-               :result :f64 :effects #{}
-               :body (list 'hetero-vector-at vector-type 'value 0)}
-              {:name 'make-point :params [] :param-types [] :result record-type :effects #{}
-               :body (list 'record-new record-type 1.25 -0.0)}
-              {:name 'point-y :params ['value] :param-types [record-type]
-               :result :f64 :effects #{}
-               :body (list 'record-get record-type 'value :y)}
-              {:name 'move-x :params ['value 'x] :param-types [record-type :f64]
-               :result record-type :effects #{}
-               :body (list 'record-assoc record-type 'value :x 'x)}]}
-        source (script/emit kir)
+  (let [source (script/emit structured-f64-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -1187,34 +1289,38 @@
                                        :result [:vector (vec (repeat 33 :i64))]
                                        :effects #{} :body 0}]}))))
 
-(deftest typed-sets-have-canonical-order-unique-items-and-persistent-updates
+(def typed-set-kir
   (let [type [:set :i64]
         option-type [:option :string]
-        nested-type [:set [:option :string]]
-        kir {:format :kotoba.kir/v4 :entry nil
-             :exports ['make 'nested 'duplicate 'contains? 'add 'remove 'same?] :effects #{}
-             :functions
-             [{:name 'make :params [] :param-types [] :result type :effects #{}
-               :body (list 'typed-set-new type 3 1 2)}
-              {:name 'nested :params [] :param-types [] :result nested-type :effects #{}
-               :body (list 'typed-set-new nested-type
-                           (list 'option-some-of option-type "b")
-                           (list 'option-none-of option-type)
-                           (list 'option-some-of option-type "a"))}
-              {:name 'duplicate :params [] :param-types [] :result type :effects #{}
-               :body (list 'typed-set-new type 1 1)}
-              {:name 'contains? :params ['value 'item] :param-types [type :i64]
-               :result :bool :effects #{}
-               :body (list 'typed-set-contains type 'value 'item)}
-              {:name 'add :params ['value 'item] :param-types [type :i64]
-               :result type :effects #{}
-               :body (list 'typed-set-conj type 'value 'item)}
-              {:name 'remove :params ['value 'item] :param-types [type :i64]
-               :result type :effects #{}
-               :body (list 'typed-set-disj type 'value 'item)}
-              {:name 'same? :params ['left 'right] :param-types [type type]
-               :result :i64 :effects #{}
-               :body (list 'typed-set-equal type 'left 'right)}]}
+        nested-type [:set [:option :string]]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports ['make 'nested 'duplicate 'contains? 'add 'remove 'same?] :effects #{}
+     :functions
+     [{:name 'make :params [] :param-types [] :result type :effects #{}
+       :body (list 'typed-set-new type 3 1 2)}
+      {:name 'nested :params [] :param-types [] :result nested-type :effects #{}
+       :body (list 'typed-set-new nested-type
+                   (list 'option-some-of option-type "b")
+                   (list 'option-none-of option-type)
+                   (list 'option-some-of option-type "a"))}
+      {:name 'duplicate :params [] :param-types [] :result type :effects #{}
+       :body (list 'typed-set-new type 1 1)}
+      {:name 'contains? :params ['value 'item] :param-types [type :i64]
+       :result :bool :effects #{}
+       :body (list 'typed-set-contains type 'value 'item)}
+      {:name 'add :params ['value 'item] :param-types [type :i64]
+       :result type :effects #{}
+       :body (list 'typed-set-conj type 'value 'item)}
+      {:name 'remove :params ['value 'item] :param-types [type :i64]
+       :result type :effects #{}
+       :body (list 'typed-set-disj type 'value 'item)}
+      {:name 'same? :params ['left 'right] :param-types [type type]
+       :result :i64 :effects #{}
+       :body (list 'typed-set-equal type 'left 'right)}]}))
+
+(deftest typed-sets-have-canonical-order-unique-items-and-persistent-updates
+  (let [type [:set :i64]
+        kir typed-set-kir
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1239,14 +1345,18 @@
                            (assoc-in kir [:functions 0 :body]
                                      (list 'typed-set-new type "wrong")))))))
 
+(def typed-list-kir
+  (let [type [:list :i64]]
+    {:format :kotoba.kir/v4 :entry nil :exports ['make 'count-items] :effects #{}
+     :functions
+     [{:name 'make :params [] :param-types [] :result type :effects #{}
+       :body (list 'typed-list-new type 4 5 6)}
+      {:name 'count-items :params ['value] :param-types [type]
+       :result :i64 :effects #{} :body '(vector-count value)}]}))
+
 (deftest canonical-lists-construct-count-and-validate-items
   (let [type [:list :i64]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['make 'count-items] :effects #{}
-             :functions
-             [{:name 'make :params [] :param-types [] :result type :effects #{}
-               :body (list 'typed-list-new type 4 5 6)}
-              {:name 'count-items :params ['value] :param-types [type]
-               :result :i64 :effects #{} :body '(vector-count value)}]}
+        kir typed-list-kir
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1261,14 +1371,16 @@
                           (assoc-in kir [:functions 0 :body]
                                      (list 'typed-list-new type "wrong")))))))
 
+(def bytes-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['make 'identity] :effects #{}
+   :functions
+   [{:name 'make :params [] :param-types [] :result :bytes :effects #{}
+     :body '(bytes-empty)}
+    {:name 'identity :params ['value] :param-types [:bytes]
+     :result :bytes :effects #{} :body 'value}]})
+
 (deftest canonical-empty-bytes-cross-restricted-esm-boundaries
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['make 'identity] :effects #{}
-             :functions
-             [{:name 'make :params [] :param-types [] :result :bytes :effects #{}
-               :body '(bytes-empty)}
-              {:name 'identity :params ['value] :param-types [:bytes]
-               :result :bytes :effects #{} :body 'value}]}
-        source (script/emit kir)
+  (let [source (script/emit bytes-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),empty=x.make(),value=new Uint8Array([1,2,3]);"
@@ -1278,27 +1390,34 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "bytesLimits:Object.freeze({valueBytes:65536})"))))
 
+(def ^:private record-person-type
+  [:record :demo/person [[:name :string] [:age :i64] [:nickname [:option :string]]]])
+
+(def record-kir
+  (let [type record-person-type
+        option-type [:option :string]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports ['make 'name-of 'birthday 'same?] :effects #{}
+     :functions
+     [{:name 'make :params [] :param-types [] :result type :effects #{}
+       :body (list 'record-new type "Kotoba" 7
+                   (list 'option-none-of option-type))}
+      {:name 'name-of :params ['value] :param-types [type]
+       :result :string :effects #{}
+       :body (list 'record-get type 'value :name)}
+      {:name 'birthday :params ['value 'age] :param-types [type :i64]
+       :result type :effects #{}
+       :body (list 'record-assoc type 'value :age 'age)}
+      {:name 'same? :params ['left 'right] :param-types [type type]
+       :result :i64 :effects #{}
+       :body (list 'record-equal type 'left 'right)}]}))
+
 (deftest bounded-records-seal-schema-field-order-and-persistent-updates
-  (let [type [:record :demo/person [[:name :string] [:age :i64]
-                                     [:nickname [:option :string]]]]
+  (let [type record-person-type
         other-type [:record :demo/account [[:name :string] [:age :i64]
                                             [:nickname [:option :string]]]]
         option-type [:option :string]
-        kir {:format :kotoba.kir/v4 :entry nil
-             :exports ['make 'name-of 'birthday 'same?] :effects #{}
-             :functions
-             [{:name 'make :params [] :param-types [] :result type :effects #{}
-               :body (list 'record-new type "Kotoba" 7
-                           (list 'option-none-of option-type))}
-              {:name 'name-of :params ['value] :param-types [type]
-               :result :string :effects #{}
-               :body (list 'record-get type 'value :name)}
-              {:name 'birthday :params ['value 'age] :param-types [type :i64]
-               :result type :effects #{}
-               :body (list 'record-assoc type 'value :age 'age)}
-              {:name 'same? :params ['left 'right] :param-types [type type]
-               :result :i64 :effects #{}
-               :body (list 'record-equal type 'left 'right)}]}
+        kir record-kir
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
@@ -1333,29 +1452,35 @@
                                             (range 33))]))))
     (is (not= type other-type))))
 
+(def vector-i64-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['count-items 'lookup 'require-item 'drop-items 'update 'append 'same?]
+   :effects #{}
+   :functions
+   [{:name 'count-items :params ['value] :param-types [:vector-i64]
+     :result :i64 :effects #{} :body '(vector-count value)}
+    {:name 'lookup :params ['value 'index] :param-types [:vector-i64 :i64]
+     :result :i64 :effects #{} :body '(vector-get value index 99)}
+    {:name 'require-item :params ['value 'index] :param-types [:vector-i64 :i64]
+     :result :i64 :effects #{} :body '(vector-at value index)}
+    {:name 'drop-items :params ['value 'count] :param-types [:vector-i64 :i64]
+     :result :vector-i64 :effects #{} :body '(vector-drop value count)}
+    {:name 'update :params ['value 'index 'item]
+     :param-types [:vector-i64 :i64 :i64] :result :vector-i64 :effects #{}
+     :body '(vector-assoc value index item)}
+    {:name 'append :params ['value 'item] :param-types [:vector-i64 :i64]
+     :result :vector-i64 :effects #{} :body '(vector-conj value item)}
+    {:name 'same? :params ['left 'right] :param-types [:vector-i64 :vector-i64]
+     ;; profile 5: `=` is :bool
+     :result :bool :effects #{} :body '(= left right)}]})
+
+(def vector-at-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['at] :effects #{}
+   :functions [{:name 'at :params ['v] :param-types [:vector-i64]
+                :result :i64 :effects #{} :body '(vector-at v 2)}]})
+
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
-  (let [typed-kir
-        {:format :kotoba.kir/v4 :entry nil
-         :exports ['count-items 'lookup 'require-item 'drop-items 'update 'append 'same?]
-         :effects #{}
-         :functions
-         [{:name 'count-items :params ['value] :param-types [:vector-i64]
-           :result :i64 :effects #{} :body '(vector-count value)}
-          {:name 'lookup :params ['value 'index] :param-types [:vector-i64 :i64]
-           :result :i64 :effects #{} :body '(vector-get value index 99)}
-          {:name 'require-item :params ['value 'index] :param-types [:vector-i64 :i64]
-           :result :i64 :effects #{} :body '(vector-at value index)}
-          {:name 'drop-items :params ['value 'count] :param-types [:vector-i64 :i64]
-           :result :vector-i64 :effects #{} :body '(vector-drop value count)}
-          {:name 'update :params ['value 'index 'item]
-           :param-types [:vector-i64 :i64 :i64] :result :vector-i64 :effects #{}
-           :body '(vector-assoc value index item)}
-          {:name 'append :params ['value 'item] :param-types [:vector-i64 :i64]
-           :result :vector-i64 :effects #{} :body '(vector-conj value item)}
-          {:name 'same? :params ['left 'right] :param-types [:vector-i64 :vector-i64]
-           ;; profile 5: `=` is :bool
-           :result :bool :effects #{} :body '(= left right)}]}
-        source (script/emit typed-kir)
+  (let [source (script/emit vector-i64-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});const before=[1n,2n];"
@@ -1375,10 +1500,7 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "vectorLimits:Object.freeze({items:16384})"))
     (is (str/includes? source "const makeVector=")))
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['at] :effects #{}
-             :functions [{:name 'at :params ['v] :param-types [:vector-i64]
-                          :result :i64 :effects #{} :body '(vector-at v 2)}]}
-        source (script/emit kir)
+  (let [source (script/emit vector-at-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
@@ -1392,28 +1514,30 @@
                                        :result :vector-i64 :effects #{}
                                        :body (apply list 'vector-new (range 16385))}]}))))
 
+(def vector-f64-kir
+  {:format :kotoba.kir/v4 :entry nil
+   :exports ['make 'count-items 'lookup 'require-item 'drop-items 'update 'append]
+   :effects #{}
+   :functions
+   [{:name 'make :params [] :param-types [] :result :vector-f64 :effects #{}
+     :body '(vector-f64-new -0.0 ##NaN 1.5)}
+    {:name 'count-items :params ['value] :param-types [:vector-f64]
+     :result :i64 :effects #{} :body '(vector-f64-count value)}
+    {:name 'lookup :params ['value 'index 'fallback]
+     :param-types [:vector-f64 :i64 :f64] :result :f64 :effects #{}
+     :body '(vector-f64-get value index fallback)}
+    {:name 'require-item :params ['value 'index] :param-types [:vector-f64 :i64]
+     :result :f64 :effects #{} :body '(vector-f64-at value index)}
+    {:name 'drop-items :params ['value 'count] :param-types [:vector-f64 :i64]
+     :result :vector-f64 :effects #{} :body '(vector-f64-drop value count)}
+    {:name 'update :params ['value 'index 'item]
+     :param-types [:vector-f64 :i64 :f64] :result :vector-f64 :effects #{}
+     :body '(vector-f64-assoc value index item)}
+    {:name 'append :params ['value 'item] :param-types [:vector-f64 :f64]
+     :result :vector-f64 :effects #{} :body '(vector-f64-conj value item)}]})
+
 (deftest bounded-vector-f64-preserves-ieee-values-and-persistence
-  (let [kir {:format :kotoba.kir/v4 :entry nil
-             :exports ['make 'count-items 'lookup 'require-item 'drop-items 'update 'append]
-             :effects #{}
-             :functions
-             [{:name 'make :params [] :param-types [] :result :vector-f64 :effects #{}
-               :body '(vector-f64-new -0.0 ##NaN 1.5)}
-              {:name 'count-items :params ['value] :param-types [:vector-f64]
-               :result :i64 :effects #{} :body '(vector-f64-count value)}
-              {:name 'lookup :params ['value 'index 'fallback]
-               :param-types [:vector-f64 :i64 :f64] :result :f64 :effects #{}
-               :body '(vector-f64-get value index fallback)}
-              {:name 'require-item :params ['value 'index] :param-types [:vector-f64 :i64]
-               :result :f64 :effects #{} :body '(vector-f64-at value index)}
-              {:name 'drop-items :params ['value 'count] :param-types [:vector-f64 :i64]
-               :result :vector-f64 :effects #{} :body '(vector-f64-drop value count)}
-              {:name 'update :params ['value 'index 'item]
-               :param-types [:vector-f64 :i64 :f64] :result :vector-f64 :effects #{}
-               :body '(vector-f64-assoc value index item)}
-              {:name 'append :params ['value 'item] :param-types [:vector-f64 :f64]
-               :result :vector-f64 :effects #{} :body '(vector-f64-conj value item)}]}
-        source (script/emit kir)
+  (let [source (script/emit vector-f64-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),v=x.make();"
@@ -1437,7 +1561,7 @@
                                        :body (apply list 'vector-f64-new
                                                     (repeat 16385 0.0))}]}))))
 
-(deftest compact-string-index-and-disjoint-set-are-bounded-and-persistent
+(def string-index-disjoint-set-kir
   (let [functions
         [{:name 'index :params [] :param-types [] :result :string-index :effects #{}
           :body '(string-index-assoc (string-index-assoc (string-index-new) "b" 2) "a" 1)}
@@ -1449,9 +1573,12 @@
                    (disjoint-set-i64-new 0))}
          {:name 'cycle :params [] :param-types [] :result :bool :effects #{}
           :body '(option-some?-of [:option :disjoint-set-i64]
-                   (disjoint-set-i64-union (joined) 2 0))}]
-        source (script/emit {:format :kotoba.kir/v4 :entry nil
-                             :exports (mapv :name functions) :effects #{} :functions functions})
+                   (disjoint-set-i64-union (joined) 2 0))}]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports (mapv :name functions) :effects #{} :functions functions}))
+
+(deftest compact-string-index-and-disjoint-set-are-bounded-and-persistent
+  (let [source (script/emit string-index-disjoint-set-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
@@ -1463,7 +1590,7 @@
     (is (str/includes? source "const assertStringIndex="))
     (is (str/includes? source "const disjointSetI64Union="))))
 
-(deftest bounded-canonical-documents-are-persistent-and-reject-host-objects
+(def document-kir
   (let [functions
         [{:name 'doc :params [] :param-types [] :result :document :effects #{}
           :body '(document-map :type (document-string "Annotation")
@@ -1491,9 +1618,12 @@
           :body '(document-map :a (document-null) :b (document-null))}
          {:name 'repeated-value :params [] :param-types [] :result :document :effects #{}
           :body '(let [item (document-map :name (document-string "same"))]
-                   (document-vector item item))}]
-        source (script/emit {:format :kotoba.kir/v4 :entry nil
-                             :exports (mapv :name functions) :effects #{} :functions functions})
+                   (document-vector item item))}]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports (mapv :name functions) :effects #{} :functions functions}))
+
+(deftest bounded-canonical-documents-are-persistent-and-reject-host-objects
+  (let [source (script/emit document-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result
         (run-node
@@ -1517,7 +1647,7 @@
     (is (str/includes? source "const docKind="))
     (is (str/includes? source "const docEqual="))))
 
-(deftest document-sha256-is-stable-and-content-sensitive
+(def document-sha256-kir
   (let [functions
         [{:name 'null-digest :params [] :param-types [] :result :string :effects #{}
           :body '(document-sha256 (document-null))}
@@ -1530,9 +1660,12 @@
                    (document-map :tag (document-string "div")
                                  :text (document-string "World")))}
          {:name 'digest :params ['value] :param-types [:document]
-          :result :string :effects #{} :body '(document-sha256 value)}]
-        source (script/emit {:format :kotoba.kir/v4 :entry nil
-                             :exports (mapv :name functions) :effects #{} :functions functions})
+          :result :string :effects #{} :body '(document-sha256 value)}]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports (mapv :name functions) :effects #{} :functions functions}))
+
+(deftest document-sha256-is-stable-and-content-sensitive
+  (let [source (script/emit document-sha256-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         ;; golden for single-byte encoding of document-null ("n")
         null-hex "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9"
@@ -1550,7 +1683,7 @@
     (is (str/includes? source "const docSha256="))
     (is (str/includes? source "const docCanonicalBytes="))))
 
-(deftest bounded-document-textual-edn-roundtrips-and-rejects-reader-authority
+(def document-edn-kir
   (let [functions
         [{:name 'value :params [] :param-types [] :result :document :effects #{}
           :body '(document-map
@@ -1598,9 +1731,12 @@
          {:name 'bad-symbol :params [] :param-types [] :result :string :effects #{}
           :body '(document-edn-print (document-symbol (symbol "nil")))}
          {:name 'bad :params [] :param-types [] :result :document :effects #{}
-          :body '(document-edn-read "#inst \"2026-08-03\"")}]
-        source (script/emit {:format :kotoba.kir/v4 :entry nil
-                             :exports (mapv :name functions) :effects #{} :functions functions})
+          :body '(document-edn-read "#inst \"2026-08-03\"")}]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports (mapv :name functions) :effects #{} :functions functions}))
+
+(deftest bounded-document-textual-edn-roundtrips-and-rejects-reader-authority
+  (let [source (script/emit document-edn-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -1619,7 +1755,7 @@
     (is (str/includes? source "const docEdnPrint="))
     (is (str/includes? source "const docEdnRead="))))
 
-(deftest bounded-document-vectors-have-safe-persistent-operations
+(def document-vector-kir
   (let [functions
         [{:name 'items :params [] :param-types [] :result :document :effects #{}
           :body '(document-vector (document-i64 1) (document-i64 2))}
@@ -1647,9 +1783,12 @@
          {:name 'key-name :params [] :param-types [] :result :string :effects #{}
           :body '(keyword-name :rdf/type)}
          {:name 'bad-assoc :params [] :param-types [] :result :document :effects #{}
-          :body '(document-vector-assoc (items) -1 (document-null))}]
-        source (script/emit {:format :kotoba.kir/v4 :entry nil
-                             :exports (mapv :name functions) :effects #{} :functions functions})
+          :body '(document-vector-assoc (items) -1 (document-null))}]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports (mapv :name functions) :effects #{} :functions functions}))
+
+(deftest bounded-document-vectors-have-safe-persistent-operations
+  (let [source (script/emit document-vector-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -1664,13 +1803,15 @@
     (is (str/includes? source "const docVectorAt="))
     (is (str/includes? source "const docVectorConj="))))
 
+(def keyword-from-string-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['context-key]
+   :effects #{}
+   :functions [{:name 'context-key :params [] :param-types []
+                :result :keyword :effects #{}
+                :body '(keyword-from-string "@context")}]})
+
 (deftest bounded-keywords-can-be-created-from-safe-runtime-text
-  (let [source (script/emit
-                {:format :kotoba.kir/v4 :entry nil :exports ['context-key]
-                 :effects #{}
-                 :functions [{:name 'context-key :params [] :param-types []
-                              :result :keyword :effects #{}
-                              :body '(keyword-from-string "@context")}]})
+  (let [source (script/emit keyword-from-string-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
@@ -1696,17 +1837,19 @@
   (is (thrown? clojure.lang.ExceptionInfo
                (script/verify-output! "export const x=import('x');"))))
 
+(def generated-identifier-kir
+  {:format :kotoba.kir/v3 :entry nil :exports ['within-window]
+   :effects #{}
+   :functions
+   [{:name 'within-window
+     :params ['window-ms 'document-count 'process-id]
+     :param-types [:i64 :i64 :i64]
+     :result :i64
+     :effects #{}
+     :body '(if (<= document-count window-ms) process-id 0)}]})
+
 (deftest verifier-distinguishes-generated-identifiers-from-ambient-authority
-  (let [kir {:format :kotoba.kir/v3 :entry nil :exports ['within-window]
-             :effects #{}
-             :functions
-             [{:name 'within-window
-               :params ['window-ms 'document-count 'process-id]
-               :param-types [:i64 :i64 :i64]
-               :result :i64
-               :effects #{}
-               :body '(if (<= document-count window-ms) process-id 0)}]}
-        source (script/emit kir)]
+  (let [source (script/emit generated-identifier-kir)]
     (is (string? source))
     (is (str/includes? source "k$window$002dms"))
     (is (str/includes? source "k$document$002dcount"))
@@ -1721,28 +1864,30 @@
     (is (thrown? clojure.lang.ExceptionInfo
                  (script/verify-output! source)))))
 
-(deftest bounded-typed-maps-execute-with-canonical-keys-and-typed-absence
+(def typed-map-kir
   (let [type [:map :keyword :i64]
         option-type [:option :i64]
-        entry-type [:option [:vector [:keyword :i64]]]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['present 'missing 'updated 'entry]
-             :effects #{}
-             :functions
-             [{:name 'present :params [] :param-types [] :result option-type :effects #{}
-               :body (list 'typed-map-get type
-                           (list 'typed-map-new type :b 2 :a 1) :b)}
-              {:name 'missing :params [] :param-types [] :result option-type :effects #{}
-               :body (list 'typed-map-get type (list 'typed-map-new type) :x)}
-              {:name 'updated :params [] :param-types [] :result :i64 :effects #{}
-               :body (list 'typed-map-count type
-                           (list 'typed-map-dissoc type
-                                 (list 'typed-map-assoc type
-                                       (list 'typed-map-new type :a 1) :b 2)
-                                 :a))}
-              {:name 'entry :params [] :param-types [] :result entry-type :effects #{}
-               :body (list 'typed-map-entry-at type
-                           (list 'typed-map-new type :b 2 :a 1) 0)}]}
-        source (script/emit kir)
+        entry-type [:option [:vector [:keyword :i64]]]]
+    {:format :kotoba.kir/v4 :entry nil :exports ['present 'missing 'updated 'entry]
+     :effects #{}
+     :functions
+     [{:name 'present :params [] :param-types [] :result option-type :effects #{}
+       :body (list 'typed-map-get type
+                   (list 'typed-map-new type :b 2 :a 1) :b)}
+      {:name 'missing :params [] :param-types [] :result option-type :effects #{}
+       :body (list 'typed-map-get type (list 'typed-map-new type) :x)}
+      {:name 'updated :params [] :param-types [] :result :i64 :effects #{}
+       :body (list 'typed-map-count type
+                   (list 'typed-map-dissoc type
+                         (list 'typed-map-assoc type
+                               (list 'typed-map-new type :a 1) :b 2)
+                         :a))}
+      {:name 'entry :params [] :param-types [] :result entry-type :effects #{}
+       :body (list 'typed-map-entry-at type
+                   (list 'typed-map-new type :b 2 :a 1) 0)}]}))
+
+(deftest bounded-typed-maps-execute-with-canonical-keys-and-typed-absence
+  (let [source (script/emit typed-map-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -1754,21 +1899,23 @@
     (is (zero? (:exit result)) (:err result))
     (is (str/includes? source "typedMapLimits:Object.freeze({entries:31})"))))
 
-(deftest typed-map-keys-and-vals-project-in-entry-order
+(def typed-map-keys-vals-kir
   (let [type [:map :keyword :i64]
         keys-type [:list :keyword]
-        vals-type [:list :i64]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['keys-count 'first-key 'first-val]
-             :effects #{}
-             :functions
-             [{:name 'keys-count :params [] :param-types [] :result :i64 :effects #{}
-               :body (list 'vector-count (list 'typed-map-keys type
-                                               (list 'typed-map-new type :b 2 :a 1)))}
-              {:name 'first-key :params [] :param-types [] :result keys-type :effects #{}
-               :body (list 'typed-map-keys type (list 'typed-map-new type :b 2 :a 1))}
-              {:name 'first-val :params [] :param-types [] :result vals-type :effects #{}
-               :body (list 'typed-map-vals type (list 'typed-map-new type :b 2 :a 1))}]}
-        source (script/emit kir)
+        vals-type [:list :i64]]
+    {:format :kotoba.kir/v4 :entry nil :exports ['keys-count 'first-key 'first-val]
+     :effects #{}
+     :functions
+     [{:name 'keys-count :params [] :param-types [] :result :i64 :effects #{}
+       :body (list 'vector-count (list 'typed-map-keys type
+                                       (list 'typed-map-new type :b 2 :a 1)))}
+      {:name 'first-key :params [] :param-types [] :result keys-type :effects #{}
+       :body (list 'typed-map-keys type (list 'typed-map-new type :b 2 :a 1))}
+      {:name 'first-val :params [] :param-types [] :result vals-type :effects #{}
+       :body (list 'typed-map-vals type (list 'typed-map-new type :b 2 :a 1))}]}))
+
+(deftest typed-map-keys-and-vals-project-in-entry-order
+  (let [source (script/emit typed-map-keys-vals-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -1779,29 +1926,31 @@
                      "v[1][0]!==1n||v[1][1]!==2n)process.exit(2)})"))]
     (is (zero? (:exit result)) (:err result))))
 
+(def xml-subset-kir
+  (let [option-string [:option :string]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports ['count-path 'count-name 'name-text 'text 'attr]
+     :effects #{}
+     :functions
+     [{:name 'count-path :params ['xml 'path] :param-types [:string :string]
+       :result :i64 :effects #{} :body '(xml-path-count xml path)}
+      {:name 'count-name :params ['xml 'name] :param-types [:string :string]
+       :result :i64 :effects #{} :body '(xml-name-count xml name)}
+      {:name 'name-text :params ['xml 'name 'index]
+       :param-types [:string :string :i64]
+       :result option-string :effects #{}
+       :body '(xml-name-text xml name index)}
+      {:name 'text :params ['xml 'path 'index]
+       :param-types [:string :string :i64]
+       :result option-string :effects #{}
+       :body '(xml-path-text xml path index)}
+      {:name 'attr :params ['xml 'path 'index 'attribute]
+       :param-types [:string :string :i64 :string]
+       :result option-string :effects #{}
+       :body '(xml-path-attr xml path index attribute)}]}))
+
 (deftest bounded-xml-subset-has-exact-path-text-and-typed-absence-semantics
-  (let [option-string [:option :string]
-        kir {:format :kotoba.kir/v4 :entry nil
-             :exports ['count-path 'count-name 'name-text 'text 'attr]
-             :effects #{}
-             :functions
-             [{:name 'count-path :params ['xml 'path] :param-types [:string :string]
-               :result :i64 :effects #{} :body '(xml-path-count xml path)}
-              {:name 'count-name :params ['xml 'name] :param-types [:string :string]
-               :result :i64 :effects #{} :body '(xml-name-count xml name)}
-              {:name 'name-text :params ['xml 'name 'index]
-               :param-types [:string :string :i64]
-               :result option-string :effects #{}
-               :body '(xml-name-text xml name index)}
-              {:name 'text :params ['xml 'path 'index]
-               :param-types [:string :string :i64]
-               :result option-string :effects #{}
-               :body '(xml-path-text xml path index)}
-              {:name 'attr :params ['xml 'path 'index 'attribute]
-               :param-types [:string :string :i64 :string]
-               :result option-string :effects #{}
-               :body '(xml-path-attr xml path index attribute)}]}
-        source (script/emit kir)
+  (let [source (script/emit xml-subset-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- bounded --><!DOCTYPE html><html><robot name=\"cart\"><link name=\"base\"> Hello <span>bounded</span> XML </link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot></html>"
         xml64 (.encodeToString (java.util.Base64/getEncoder) (.getBytes xml "UTF-8"))
@@ -1847,13 +1996,15 @@
     (is (str/includes? source "xmlSubsetLimits:Object.freeze({nodes:2048,depth:32,attributesPerNode:32,pathSegments:32})"))
     (is (not (re-find ambient-access-pattern source)))))
 
+(def decimal-f64-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['parse]
+   :effects #{}
+   :functions [{:name 'parse :params ['value] :param-types [:string]
+                :result [:option :f64] :effects #{}
+                :body '(decimal-f64-parse value)}]})
+
 (deftest bounded-decimal-f64-parser-is-finite-typed-and-preserves-negative-zero
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['parse]
-             :effects #{}
-             :functions [{:name 'parse :params ['value] :param-types [:string]
-                          :result [:option :f64] :effects #{}
-                          :body '(decimal-f64-parse value)}]}
-        source (script/emit kir)
+  (let [source (script/emit decimal-f64-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         valid ["0" "-0" "+1.5" "-2.4" ".5" "1." "6.022e23"
                "1e-324" "5e-324" "1.7976931348623157e308"]
@@ -1872,14 +2023,15 @@
                        "decimalF64Limits:Object.freeze({bytes:64,vector3Bytes:194,finiteOnly:true,rounding:'nearest-ties-even'})"))
     (is (not (re-find #"parseFloat|eval|Function" source)))))
 
+(def decimal-f64x3-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['parse]
+   :effects #{}
+   :functions [{:name 'parse :params ['value] :param-types [:string]
+                :result [:option [:vector [:f64 :f64 :f64]]] :effects #{}
+                :body '(decimal-f64x3-parse value)}]})
+
 (deftest bounded-decimal-f64x3-parser-is-fixed-width-and-atomic
-  (let [result-type [:option [:vector [:f64 :f64 :f64]]]
-        kir {:format :kotoba.kir/v4 :entry nil :exports ['parse]
-             :effects #{}
-             :functions [{:name 'parse :params ['value] :param-types [:string]
-                          :result result-type :effects #{}
-                          :body '(decimal-f64x3-parse value)}]}
-        source (script/emit kir)
+  (let [source (script/emit decimal-f64x3-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),ok=x.parse(' -0  1.5\\t5e-324 ');"
@@ -1891,13 +2043,15 @@
     (is (str/includes? source "vector3Bytes:194"))
     (is (not (re-find #"parseFloat|eval|Function" source)))))
 
+(def symbol-kir
+  {:format :kotoba.kir/v4 :entry nil :exports ['make]
+   :effects #{}
+   :functions [{:name 'make :params ['value] :param-types [:string]
+                :result :symbol :effects #{}
+                :body '(symbol value)}]})
+
 (deftest typed-symbol-construction-is-validated
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports ['make]
-             :effects #{}
-             :functions [{:name 'make :params ['value] :param-types [:string]
-                          :result :symbol :effects #{}
-                          :body '(symbol value)}]}
-        source (script/emit kir)
+  (let [source (script/emit symbol-kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         result (run-node
                 "node" "--input-type=module" "-e"
@@ -1907,6 +2061,16 @@
                      "try{x.make('bad value');process.exit(3)}catch(e){}})"))]
     (is (zero? (:exit result)) (str (:err result) "\n" (:out result)))
     (is (str/includes? source "symbolFromString"))))
+
+(def string-index-of-kir
+  {:format :kotoba.kir/v4 :entry nil :exports '[byte-offset absent segments]
+   :effects #{}
+   :functions [{:name 'byte-offset :params [] :param-types [] :result :i64
+                :body '(+ (string-index-of "héllo wörld" "wö") 1)}
+               {:name 'absent :params [] :param-types [] :result :i64
+                :body '(string-index-of "abc" "zz")}
+               {:name 'segments :params [] :param-types [] :result :i64
+                :body '(string-split-count "a\nb\nc" "\n")}]})
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'kotoba.script-test)]
@@ -1918,14 +2082,7 @@
   ;; Before 2026-09-06 stringIndexOf returned a JS Number of code points, so a
   ;; guest doing `(+ i 1)` threw "Cannot mix BigInt and other types", and
   ;; string-split-count was not emitted at all ("unsupported KIR operation").
-  (let [kir {:format :kotoba.kir/v4 :entry nil :exports '[byte-offset absent segments]
-             :effects #{}
-             :functions [{:name 'byte-offset :params [] :param-types [] :result :i64
-                          :body '(+ (string-index-of "héllo wörld" "wö") 1)}
-                         {:name 'absent :params [] :param-types [] :result :i64
-                          :body '(string-index-of "abc" "zz")}
-                         {:name 'segments :params [] :param-types [] :result :i64
-                          :body '(string-split-count "a\nb\nc" "\n")}]}
+  (let [kir string-index-of-kir
         source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
         js (str "import('data:text/javascript;base64," encoded
