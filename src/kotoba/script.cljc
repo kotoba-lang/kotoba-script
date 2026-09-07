@@ -168,14 +168,22 @@
 (defn- fail! [message data]
   (throw (ex-info message (assoc data :phase :kotoba-script))))
 
+#?(:cljs
+   (defn- negative-zero?
+     "JS `-0`. `Number.isInteger(-0)` is true, but no integer literal has a
+     sign on zero, so a `-0` in hand-built KIR can only be the f64 `-0.0`.
+     Tested via the sign of `1/n`: a `-0` literal in THIS source reads as
+     the integer 0, so `Object.is n -0` would match every zero."
+     [n] (and (number? n) (zero? n) (neg? (/ 1 n)))))
+
 (defn- int-literal?
   "A KIR integer literal. On the JVM that is any `integer?`; on cljs the
   frontend lowers i64 to BigInt, and a hand-built KIR may still carry a plain
-  JS integer."
+  JS integer (never `-0`, see `negative-zero?`)."
   [n]
   #?(:clj (integer? n)
      :cljs (or (and (some? n) (identical? js/BigInt (.-constructor n)))
-               (and (number? n) (js/Number.isInteger n)))))
+               (and (number? n) (js/Number.isInteger n) (not (negative-zero? n))))))
 
 (defn- int-value
   "The host number for an integer literal, for indexing and range checks.
@@ -189,10 +197,10 @@
   "A KIR f64 literal. The nbb frontend never produces one -- it lowers f64 to
   `(f64-from-bits <bits>)` -- so on cljs this only fires for hand-built KIR,
   where a whole-number double (`2.0`) is indistinguishable from an integer and
-  is read as i64."
+  is read as i64 -- except `-0`, which no integer literal can be."
   [n]
   #?(:clj (instance? Double n)
-     :cljs (and (number? n) (not (js/Number.isInteger n)))))
+     :cljs (and (number? n) (or (not (js/Number.isInteger n)) (negative-zero? n)))))
 
 #?(:cljs
    (def ^:private letter-or-digit-re (js/RegExp. "^[\\p{L}\\p{Nd}]$" "u")))
