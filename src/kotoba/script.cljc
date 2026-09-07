@@ -491,8 +491,8 @@
         (nth args 2))
     (let [types (mapv #(infer-type % env signatures) args)]
     (cond
-      (contains? '#{+ - * quot bit-xor bit-and} op)
-      (do (require-arity! op args (if (contains? '#{quot bit-xor bit-and} op)
+      (contains? '#{+ - * quot bit-xor bit-and min max} op)
+      (do (require-arity! op args (if (contains? '#{quot bit-xor bit-and min max} op)
                                     2 :positive))
           (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
 
@@ -773,6 +773,9 @@
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1)) :document)
+      (= op 'document-vector-sort)
+      (do (require-arity! op args 1)
+          (require-type! (nth types 0) :document (nth args 0)) :document)
       (= op 'document-contains)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :document (nth args 0))
@@ -1457,6 +1460,8 @@
                   (str "i64(" (str/join " - " (map a args)) ")"))
       (= op '*) (str "i64(" (str/join " * " (map a args)) ")")
       (= op 'quot) (str "quot(" (a (first args)) "," (a (second args)) ")")
+      (= op 'min) (str "i64(" (a (first args)) "<" (a (second args)) "?" (a (first args)) ":" (a (second args)) ")")
+      (= op 'max) (str "i64(" (a (first args)) ">" (a (second args)) "?" (a (first args)) ":" (a (second args)) ")")
       (= op 'bit-xor) (str "i64(" (str/join " ^ " (map a args)) ")")
       (= op 'bit-and) (str "i64(" (str/join " & " (map a args)) ")")
       (= op 'i32-wrap) (str "i32Wrap(" (a (first args)) ")")
@@ -1675,6 +1680,7 @@
       (= op 'document-vector-conj) (str "docVectorConj(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-drop) (str "docVectorDrop(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-vector-remove) (str "docVectorRemove(" (a (first args)) "," (a (second args)) ")")
+      (= op 'document-vector-sort) (str "docVectorSort(" (a (first args)) ")")
       (= op 'document-contains) (str "docContains(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-get) (str "docGet(" (a (first args)) "," (a (second args)) ")")
       (= op 'document-assoc) (str "docAssoc(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
@@ -2714,6 +2720,7 @@
              "const docVectorConj=(v,item)=>{const items=docVectorEntries(v);item=assertDoc(item);if(items.length>=32)throw new Error('doc-vector-too-large');return makeDocVector([...items,item]);};"
              "const docVectorDrop=(v,count)=>{const items=docVectorEntries(v);count=assertI64(count);if(count<0n||count>BigInt(items.length))throw new Error('doc-vector-drop-out-of-range');return makeDocVector(items.slice(Number(count)));};"
              "const docVectorRemove=(v,index)=>{const items=docVectorEntries(v);index=assertI64(index);if(index<0n||index>=BigInt(items.length))throw new Error('doc-vector-index-out-of-range');return makeDocVector(items.filter((_,i)=>i!==Number(index)));};"
+             "const docVectorSort=(v)=>{const items=docVectorEntries(v);const out=[...items];out.sort(docCompare);return makeDocVector(out);};"
              "const docPosition=(v,key)=>{const entries=docMapEntries(v);key=typeof key==='string'?makeDocScalar('keyword',key):assertDoc(key);return [entries,key,entries.findIndex(e=>docMapKeyCompare(e[0],key)===0)];};"
              "const docContains=(v,key)=>docPosition(v,key)[2]>=0;"
              "const docGet=(v,key)=>{const [entries,k,i]=docPosition(v,key);return makeGenericOption(docType,i>=0,i>=0?entries[i][1]:undefined);};"
