@@ -1,7 +1,7 @@
 (ns kotoba.script-test
   (:require [clojure.test :refer [deftest is run-tests testing]]
             [clojure.java.shell :as shell]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kotoba.script :as script])
   (:gen-class))
 
