@@ -16,7 +16,7 @@
     `node --check` for syntax and scans tokens outside string literals for the
     same forbidden globals, properties, and import forms. The token scan is a
     weaker instrument than the AST walk and says so in its failure data."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             #?@(:cljs [["node:child_process" :as child-process]
                        ["node:fs" :as node-fs]
                        ["node:os" :as node-os]
