@@ -2143,3 +2143,73 @@
     ;; the decision is in the emitted source, not in a catch
     (is (str/includes? source "utf8Continuation"))
     (is (not (str/includes? source "catch(_){throw new Error('string-substring-code-point-boundary')")))))
+
+;; A function whose last act is to call itself does not need a new frame.
+;;
+;; Until 2026-09-08 it got one anyway: `let` / `if` / `do` compile to IIFEs and
+;; the self call compiled to a real JS call, and V8 never shipped the ES2015
+;; proper-tail-call semantics. Measured that day through kbb, a guest walking a
+;; document one code point at a time died at roughly 1,600 frames -- about 4 KB
+;; of input -- while the native backend, which turns tail self-recursion into a
+;; branch, completed the same 15,532-byte document. The gap was this
+;; optimisation, not the language.
+;;
+;; 200,000 iterations is far past any engine's stack. Before the rewrite this
+;; test fails with `RangeError: Maximum call stack size exceeded`.
+(def deep-self-recursion-kir
+  {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
+   :functions
+   [{:name 'countdown :params ['n 'acc] :param-types [:i64 :i64]
+     :result :i64 :effects #{}
+     :body '(if (= n 0) acc (countdown (- n 1) (+ acc 1)))}
+    {:name 'main :params [] :param-types [] :result :i64 :effects #{}
+     :body '(countdown 200000 0)}]})
+
+(deftest a-self-tail-call-does-not-grow-the-stack
+  (let [source (script/emit deep-self-recursion-kir {:fuel 5000000})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "if(x.main()!==200000n)process.exit(2);console.log('200000')})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (str "exit=" (:exit result) " err=" (:err result)))
+    (is (= "200000\n" (:out result)))
+    ;; targeted: only the self-recursive function becomes a loop
+    (is (re-find #"function k\$countdown\([^)]*\)\{while\(true\)\{charge\(\);" source))
+    (is (not (re-find #"function k\$main\([^)]*\)\{while" source)))))
+
+(deftest the-loop-is-still-charged-once-per-call
+  ;; charge() moved INSIDE the loop, so the fuel budget still counts logical
+  ;; calls. If it were hoisted out, a bounded recursion would become an
+  ;; unbounded loop -- the budget is a safety property, and this is the test
+  ;; that says so: 200,000 iterations under a 100-unit budget must still stop.
+  (let [source (script/emit deep-self-recursion-kir {:fuel 100})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "try{x.main();process.exit(2)}catch(e){console.log(e.message)}})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (str "exit=" (:exit result) " err=" (:err result)))
+    (is (= "fuel-exhausted\n" (:out result)))))
+
+;; Arguments are evaluated before ANY parameter is assigned. `(swap b a)` must
+;; not see the new `a` while computing the new `b`; a rewrite that assigned in
+;; place would answer 2 here instead of 1.
+(def self-tail-call-argument-order-kir
+  {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
+   :functions
+   [{:name 'swap :params ['n 'a 'b] :param-types [:i64 :i64 :i64]
+     :result :i64 :effects #{}
+     :body '(if (= n 0) b (swap (- n 1) b a))}
+    {:name 'main :params [] :param-types [] :result :i64 :effects #{}
+     :body '(swap 1 1 2)}]})
+
+(deftest a-self-tail-call-evaluates-every-argument-before-assigning-any
+  (let [source (script/emit self-tail-call-argument-order-kir {:fuel 1000})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                "console.log(String(x.main()))})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (str "exit=" (:exit result) " err=" (:err result)))
+    (is (= "1\n" (:out result)))))

@@ -1790,6 +1790,110 @@
       (str (js-name op) "(" (str/join "," (map a args)) ")")
       :else (fail! "unsupported KIR operation" {:operation op}))))
 
+(declare emit-expr)
+
+;; ---------------------------------------------------------------------------
+;; Self tail calls become a loop
+;;
+;; Every other expression here compiles to a JS expression, and `let` / `if` /
+;; `do` reach that by wrapping themselves in an IIFE. A function whose last act
+;; is to call ITSELF therefore emitted a real JS call, and JS engines outside
+;; JavaScriptCore do not eliminate tail calls -- V8 never shipped the ES2015
+;; proper-tail-call semantics. So a guest that walks a document one code point
+;; at a time pushed one frame per character and died on `Maximum call stack size
+;; exceeded`. Measured 2026-09-08 through kbb: roughly 1,600 frames, which is
+;; about 4 KB of input. The native backend already turns tail self-recursion
+;; into a branch, so the same guest and the same 15,532-byte document completed
+;; there -- the difference was this optimisation, not the language.
+;;
+;; The rewrite is the standard one, and its whole content is that a call whose
+;; result is returned unchanged does not need a new frame:
+;;
+;;   function f(p){ charge(); guards; return BODY; }
+;;   function f(p){ while(true){ charge(); guards; <BODY in tail position> } }
+;;
+;; where a tail `(f a)` becomes `const t=<a>; p=t; continue;` and every other
+;; tail expression becomes `return <result guard>(<expr>);`.
+;;
+;; THREE THINGS THIS MUST NOT CHANGE, all of them observable:
+;;
+;;   fuel     `charge()` runs once per CALL. Moving it inside the loop keeps
+;;            exactly that: one charge per logical call, so a guest that used
+;;            to exhaust its budget still does, at the same iteration. Charging
+;;            once outside the loop would turn a bounded recursion into an
+;;            unbounded one -- the budget is a safety property, not a counter.
+;;   guards   parameter guards run per call, so they run per iteration, after
+;;            the assignment that a `continue` performed.
+;;   order    every argument is evaluated into a temporary BEFORE any parameter
+;;            is assigned. `(f b a)` must not see the new `a` while computing
+;;            the new `b`.
+;;
+;; Only DIRECT self calls at the exact declared arity are rewritten. Mutual
+;; recursion is untouched, and so is a self call in argument position -- both
+;; still push frames, and saying otherwise would be a claim this does not test.
+(defn- self-tail-call? [form fname arity]
+  (and (seq? form) (= (first form) fname) (= (count (rest form)) arity)))
+
+(defn- reaches-self-tail-call?
+  "Does FORM reach a self call in tail position? `let` passes the tail on to
+  its body, `if` to both branches, `do` to its last form; nothing else does."
+  [form fname arity]
+  (cond
+    (self-tail-call? form fname arity) true
+    (not (seq? form)) false
+    :else (let [[op & args] form]
+            (cond
+              (= op 'let) (reaches-self-tail-call? (second args) fname arity)
+              (= op 'if) (or (reaches-self-tail-call? (second args) fname arity)
+                             (reaches-self-tail-call? (nth args 2 nil) fname arity))
+              (= op 'do) (and (seq args)
+                              (reaches-self-tail-call? (last args) fname arity))
+              :else false))))
+
+(defn- emit-tail
+  "FORM as a JS block in tail position of the loop body.
+
+  Always a `{...}` block, so it can follow `if (...)` and `else` without a
+  separator question."
+  [form env functions counter {:keys [fname arity params wrap] :as ctx}]
+  (cond
+    (self-tail-call? form fname arity)
+    (let [temps (mapv (fn [_] (fresh-js-name counter 'tail)) (rest form))]
+      (str "{"
+           (apply str (map (fn [t a] (str "const " t "=" (emit-expr a env functions counter) ";"))
+                           temps (rest form)))
+           (apply str (map (fn [p t] (str p "=" t ";")) params temps))
+           "continue;}"))
+
+    (and (seq? form) (= 'let (first form)))
+    (let [[bindings body] (rest form)]
+      (loop [remaining (partition 2 bindings) env env out []]
+        (if-let [[name value] (first remaining)]
+          (let [n (fresh-js-name counter name)]
+            (recur (next remaining) (assoc env name n)
+                   (conj out (str "const " n "=" (emit-expr value env functions counter) ";"))))
+          (str "{" (apply str out)
+               (emit-tail body env functions counter ctx) "}"))))
+
+    (and (seq? form) (= 'if (first form)))
+    (let [[test then else] (rest form)
+          t (fresh-js-name counter 'test)]
+      (str "{const " t "=" (emit-expr test env functions counter) ";"
+           "if(typeof " t "==='boolean'?" t ":" t "!==0n)"
+           (emit-tail then env functions counter ctx)
+           "else" (emit-tail else env functions counter ctx) "}"))
+
+    (and (seq? form) (= 'do (first form)))
+    (do
+      (when (empty? (rest form))
+        (fail! "KIR do requires a value" {:node form}))
+      (str "{"
+           (apply str (map #(str "void (" (emit-expr % env functions counter) ");")
+                           (butlast (rest form))))
+           (emit-tail (last (rest form)) env functions counter ctx) "}"))
+
+    :else (str "{return " (wrap (emit-expr form env functions counter)) ";}")))
+
 (defn emit-expr
   ([form env functions]
    (emit-expr form env functions (volatile! 0)))
@@ -2079,14 +2183,24 @@
                                                          (guard-expr type param-js-name)))
                                                      ";"))
                                               (map vector param-js-names param-types)))]
-                           (str "function " (js-name name) "("
-                                (str/join "," param-js-names) "){charge();" guards "return "
-                                (if closure-result?
-                                  (str "assertClosure("
-                                       (emit-expr body env functions counter) ")")
-                                  (guard-expr result
-                                              (emit-expr body env functions counter)))
-                                ";}")))
+                           (let [wrap (fn [expression]
+                                        (if closure-result?
+                                          (str "assertClosure(" expression ")")
+                                          (guard-expr result expression)))]
+                             (if (reaches-self-tail-call? body name (count params))
+                               ;; charge() and the guards stay INSIDE the loop:
+                               ;; one charge and one guard pass per logical
+                               ;; call, exactly as before the rewrite.
+                               (str "function " (js-name name) "("
+                                    (str/join "," param-js-names) "){while(true){charge();" guards
+                                    (emit-tail body env functions counter
+                                               {:fname name :arity (count params)
+                                                :params param-js-names :wrap wrap})
+                                    "}}")
+                               (str "function " (js-name name) "("
+                                    (str/join "," param-js-names) "){charge();" guards "return "
+                                    (wrap (emit-expr body env functions counter))
+                                    ";}")))))
                        (:functions kir)))
         source
         (str "export const kotobaArtifact=Object.freeze({schema:'" artifact-schema
