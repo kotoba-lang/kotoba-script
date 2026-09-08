@@ -2502,12 +2502,27 @@
              "needle=assertString(needle);replacement=assertString(replacement);"
              "if(needle.length===0)throw new Error('empty-string-replacement-needle');"
              "return assertString(value.split(needle).join(replacement));};"
+             "const utf8Continuation=b=>b>=128&&b<192;"
              "const stringSubstring=(value,start,end)=>{value=assertString(value);"
              "start=Number(start);end=Number(end);const bytes=new TextEncoder().encode(value);"
              "if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>end||end>bytes.length)"
              "throw new Error('string-substring-bounds');"
-             "try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes.slice(start,end));}"
-             "catch(_){throw new Error('string-substring-code-point-boundary');}};"
+             ;; The boundary violation is DECIDED, not inferred from a throw.
+             ;; `value` is a JS string, so its UTF-8 encoding is always well
+             ;; formed and the only decode failure possible here is a cut inside
+             ;; a code point -- which is exactly the condition below. Catching
+             ;; instead (as this did until 2026-09-08) renamed EVERY failure
+             ;; raised inside the try to `string-substring-code-point-boundary`,
+             ;; including the RangeError a deep guest recursion raises when the
+             ;; JS stack runs out. Measured that day: a kbb guest scanning a
+             ;; 4 KB PURE ASCII document -- no multi-byte character anywhere --
+             ;; failed as a code-point boundary violation, and the same guest
+             ;; with the substring removed failed honestly as `Maximum call
+             ;; stack size exceeded`. The wrong name cost a day and produced a
+             ;; wrong diagnosis of the language surface.
+             "if(utf8Continuation(bytes[start])||(end<bytes.length&&utf8Continuation(bytes[end])))"
+             "throw new Error('string-substring-code-point-boundary');"
+             "return new TextDecoder('utf-8',{fatal:true}).decode(bytes.slice(start,end));};"
              "const stringContains=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
              "if(needle.length===0)throw new Error('empty-string-search-needle');"
              "return value.includes(needle);};"

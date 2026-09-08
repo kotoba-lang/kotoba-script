@@ -2093,3 +2093,53 @@
     ;; "héllo " is 7 bytes (é = 2), so "wö" starts at byte 7; +1 -> 8.
     (is (= "8 -1 3\n" (:out result)))
     (is (= source (script/emit kir)))))
+
+;; A code-point boundary violation must be DECIDED, not inferred from a throw.
+;;
+;; stringSubstring used to run the decode inside `try{...}catch(_){throw new
+;; Error('string-substring-code-point-boundary')}`. That catch is bare, so it
+;; renamed every failure raised inside it -- including the RangeError a deep
+;; guest recursion raises when the JS stack runs out. Measured 2026-09-08 in
+;; the workspace: a kbb guest scanning a 4 KB document with NO multi-byte
+;; character anywhere failed as `string-substring-code-point-boundary`, and the
+;; same guest with the substring taken out failed honestly as `Maximum call
+;; stack size exceeded`. The rename turned a missing tail-call optimisation
+;; into a false report about the UTF-8 surface.
+;;
+;; "aこb" is 5 UTF-8 bytes: a | e3 81 93 | b. (0,1) and (1,4) are boundaries;
+;; (1,2) cuts inside こ.
+(def substring-boundary-kir
+  {:format :kotoba.kir/v4 :entry 'main :exports ['main 'cut] :effects #{}
+   :functions
+   [{:name 'cut :params ['start 'end] :param-types [:i64 :i64]
+     :result :string :effects #{}
+     :body '(string-substring "aこb" start end)}
+    {:name 'main :params [] :param-types [] :result :string :effects #{}
+     :body '(cut 1 4)}]})
+
+(deftest substring-reports-a-boundary-only-when-there-is-one
+  (let [source (script/emit substring-boundary-kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({});"
+                ;; the op still works, and still names a real boundary cut
+                "if(x.main()!=='こ')process.exit(2);"
+                "if(x.cut(0n,1n)!=='a')process.exit(3);"
+                "try{x.cut(1n,2n);process.exit(4)}"
+                "catch(e){if(e.message!=='string-substring-code-point-boundary')process.exit(5)}"
+                ;; a failure that is NOT a boundary violation must keep its own
+                ;; name. Injecting it at the decode is the same position the
+                ;; stack overflow occupied.
+                "const real=globalThis.TextDecoder;"
+                "globalThis.TextDecoder=class{decode(){throw new Error('injected-not-a-boundary')}};"
+                "let seen='none';"
+                "try{x.cut(0n,1n)}catch(e){seen=e.message}finally{globalThis.TextDecoder=real}"
+                "if(seen!=='injected-not-a-boundary')process.exit(6);"
+                "console.log(seen)})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result))
+        (str "exit=" (:exit result) " out=" (:out result) " err=" (:err result)))
+    (is (= "injected-not-a-boundary\n" (:out result)))
+    ;; the decision is in the emitted source, not in a catch
+    (is (str/includes? source "utf8Continuation"))
+    (is (not (str/includes? source "catch(_){throw new Error('string-substring-code-point-boundary')")))))
