@@ -102,6 +102,89 @@
       (ok! (str "verifier " label " -> " (or expect "accepted")))
       (fail! (str "verifier " label) (str "expected " (or expect "accepted") " got " outcome)))))
 
+;; 4. self tail calls, run rather than compared
+;;
+;; These three ran only under `clojure -M:test` when they landed, which put new
+;; assertions on the JVM at the moment the workspace is trying to leave it. The
+;; behaviour needs a JS engine, not a JVM, so it belongs here: nbb emits from
+;; the same `.cljc` and node runs the result.
+;;
+;; The KIR is read from the fixture the golden generator already writes, so
+;; there is one definition of each program, not two to drift apart.
+(defn- run-module
+  "Emit KIR, run it under node, answer [stdout stderr]."
+  [kir opts]
+  (let [src (if opts (script/emit kir opts) (script/emit kir))
+        tmp (str (.tmpdir (js/require "node:os")) "/kotoba-script-tail-"
+                 (.-pid js/process) "-" (rand-int 1000000) ".mjs")]
+    (fs/writeFileSync tmp src)
+    (let [r (cp/spawnSync "node" #js ["--input-type=module" "-e"
+                                      (str "import('" tmp "').then(m=>{const x=m.instantiateKotoba({});"
+                                           "try{console.log(String(x.main()))}"
+                                           "catch(e){console.log('THREW:'+e.message)}})")]
+                          #js {:encoding "utf8"})]
+      (fs/rmSync tmp #js {:force true})
+      [(str/trim (str (.-stdout r))) (str (.-stderr r)) src])))
+
+(let [kir (read-fixture (str dir "/deep-self-recursion-kir.kir.edn"))]
+  ;; 200,000 iterations is far past any engine's stack. Before the loop
+  ;; rewrite this answers `THREW:Maximum call stack size exceeded`.
+  (swap! scanned inc)
+  (let [[out err src] (run-module kir {:fuel 5000000})]
+    (if (= "200000" out)
+      (ok! "a self tail call does not grow the stack (200,000 deep)")
+      (fail! "self tail call depth" (str out " " err))))
+  ;; charge() stays INSIDE the loop, so the budget still counts logical calls.
+  ;; Hoisting it out would turn a bounded recursion into an unbounded loop --
+  ;; this is the assertion that says the safety property survived.
+  (swap! scanned inc)
+  (let [[out err] (run-module kir {:fuel 100})]
+    (if (= "THREW:fuel-exhausted" out)
+      (ok! "the loop is still charged once per call (fuel 100 stops it)")
+      (fail! "self tail call fuel" (str out " " err))))
+  ;; and the rewrite is targeted: only the self-recursive function loops.
+  (swap! scanned inc)
+  (let [[_ _ src] (run-module kir {:fuel 100})]
+    (if (and (re-find #"function k\$countdown\([^)]*\)\{while\(true\)\{charge\(\);" src)
+             (not (re-find #"function k\$main\([^)]*\)\{while" src)))
+      (ok! "only the self-recursive function became a loop")
+      (fail! "self tail call shape" "countdown should loop and main should not"))))
+
+;; Arguments are evaluated before ANY parameter is assigned: `(swap n b a)`
+;; answers 1, and a rewrite that assigned in place would answer 2.
+(let [kir (read-fixture (str dir "/self-tail-call-argument-order-kir.kir.edn"))]
+  (swap! scanned inc)
+  (let [[out err] (run-module kir {:fuel 1000})]
+    (if (= "1" out)
+      (ok! "a self tail call evaluates every argument before assigning any")
+      (fail! "self tail call argument order" (str out " " err)))))
+
+;; A boundary violation is DECIDED, not inferred from a throw: a real
+;; boundary cut is still named, and an error injected at the decode keeps its
+;; own name instead of being renamed to the boundary code.
+(let [kir (read-fixture (str dir "/substring-boundary-kir.kir.edn"))
+      src (script/emit kir)
+      tmp (str (.tmpdir (js/require "node:os")) "/kotoba-script-substring-"
+               (.-pid js/process) ".mjs")]
+  (swap! scanned inc)
+  (fs/writeFileSync tmp src)
+  (let [r (cp/spawnSync "node" #js ["--input-type=module" "-e"
+                                    (str "import('" tmp "').then(m=>{const x=m.instantiateKotoba({});"
+                                         "if(x.main()!=='\u3053')process.exit(2);"
+                                         "if(x.cut(0n,1n)!=='a')process.exit(3);"
+                                         "try{x.cut(1n,2n);process.exit(4)}"
+                                         "catch(e){if(e.message!=='string-substring-code-point-boundary')process.exit(5)}"
+                                         "const real=globalThis.TextDecoder;"
+                                         "globalThis.TextDecoder=class{decode(){throw new Error('injected-not-a-boundary')}};"
+                                         "let seen='none';"
+                                         "try{x.cut(0n,1n)}catch(e){seen=e.message}finally{globalThis.TextDecoder=real}"
+                                         "console.log(seen)})")]
+                        #js {:encoding "utf8"})]
+    (fs/rmSync tmp #js {:force true})
+    (if (= "injected-not-a-boundary" (str/trim (str (.-stdout r))))
+      (ok! "substring reports a boundary only when there is one")
+      (fail! "substring boundary" (str (.-stdout r) (.-stderr r))))))
+
 (println (str "GOLDENS " @golden-count " bytes " @golden-bytes))
 (println (str "SCANNED " @scanned " failed " (count @failures)))
 (.exit js/process (cond (zero? @scanned) 2 (seq @failures) 1 :else 0))

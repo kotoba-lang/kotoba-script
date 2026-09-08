@@ -2108,6 +2108,11 @@
 ;;
 ;; "aこb" is 5 UTF-8 bytes: a | e3 81 93 | b. (0,1) and (1,4) are boundaries;
 ;; (1,2) cuts inside こ.
+;; The behaviour tests over these three fixtures live in test/nbb/parity.cljs,
+;; not here: they need a JS engine, not a JVM, and this namespace is one of the
+;; `clojure -M:test` sites the workspace is retiring (ADR-2609070200). The
+;; fixtures stay because scripts/gen-parity-golden.clj lifts them into goldens,
+;; and the nbb suite reads the same fixture files -- one definition, not two.
 (def substring-boundary-kir
   {:format :kotoba.kir/v4 :entry 'main :exports ['main 'cut] :effects #{}
    :functions
@@ -2117,45 +2122,6 @@
     {:name 'main :params [] :param-types [] :result :string :effects #{}
      :body '(cut 1 4)}]})
 
-(deftest substring-reports-a-boundary-only-when-there-is-one
-  (let [source (script/emit substring-boundary-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        js (str "import('data:text/javascript;base64," encoded
-                "').then(m=>{const x=m.instantiateKotoba({});"
-                ;; the op still works, and still names a real boundary cut
-                "if(x.main()!=='こ')process.exit(2);"
-                "if(x.cut(0n,1n)!=='a')process.exit(3);"
-                "try{x.cut(1n,2n);process.exit(4)}"
-                "catch(e){if(e.message!=='string-substring-code-point-boundary')process.exit(5)}"
-                ;; a failure that is NOT a boundary violation must keep its own
-                ;; name. Injecting it at the decode is the same position the
-                ;; stack overflow occupied.
-                "const real=globalThis.TextDecoder;"
-                "globalThis.TextDecoder=class{decode(){throw new Error('injected-not-a-boundary')}};"
-                "let seen='none';"
-                "try{x.cut(0n,1n)}catch(e){seen=e.message}finally{globalThis.TextDecoder=real}"
-                "if(seen!=='injected-not-a-boundary')process.exit(6);"
-                "console.log(seen)})")
-        result (run-node "node" "--input-type=module" "-e" js)]
-    (is (zero? (:exit result))
-        (str "exit=" (:exit result) " out=" (:out result) " err=" (:err result)))
-    (is (= "injected-not-a-boundary\n" (:out result)))
-    ;; the decision is in the emitted source, not in a catch
-    (is (str/includes? source "utf8Continuation"))
-    (is (not (str/includes? source "catch(_){throw new Error('string-substring-code-point-boundary')")))))
-
-;; A function whose last act is to call itself does not need a new frame.
-;;
-;; Until 2026-09-08 it got one anyway: `let` / `if` / `do` compile to IIFEs and
-;; the self call compiled to a real JS call, and V8 never shipped the ES2015
-;; proper-tail-call semantics. Measured that day through kbb, a guest walking a
-;; document one code point at a time died at roughly 1,600 frames -- about 4 KB
-;; of input -- while the native backend, which turns tail self-recursion into a
-;; branch, completed the same 15,532-byte document. The gap was this
-;; optimisation, not the language.
-;;
-;; 200,000 iterations is far past any engine's stack. Before the rewrite this
-;; test fails with `RangeError: Maximum call stack size exceeded`.
 (def deep-self-recursion-kir
   {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
    :functions
@@ -2165,36 +2131,6 @@
     {:name 'main :params [] :param-types [] :result :i64 :effects #{}
      :body '(countdown 200000 0)}]})
 
-(deftest a-self-tail-call-does-not-grow-the-stack
-  (let [source (script/emit deep-self-recursion-kir {:fuel 5000000})
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        js (str "import('data:text/javascript;base64," encoded
-                "').then(m=>{const x=m.instantiateKotoba({});"
-                "if(x.main()!==200000n)process.exit(2);console.log('200000')})")
-        result (run-node "node" "--input-type=module" "-e" js)]
-    (is (zero? (:exit result)) (str "exit=" (:exit result) " err=" (:err result)))
-    (is (= "200000\n" (:out result)))
-    ;; targeted: only the self-recursive function becomes a loop
-    (is (re-find #"function k\$countdown\([^)]*\)\{while\(true\)\{charge\(\);" source))
-    (is (not (re-find #"function k\$main\([^)]*\)\{while" source)))))
-
-(deftest the-loop-is-still-charged-once-per-call
-  ;; charge() moved INSIDE the loop, so the fuel budget still counts logical
-  ;; calls. If it were hoisted out, a bounded recursion would become an
-  ;; unbounded loop -- the budget is a safety property, and this is the test
-  ;; that says so: 200,000 iterations under a 100-unit budget must still stop.
-  (let [source (script/emit deep-self-recursion-kir {:fuel 100})
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        js (str "import('data:text/javascript;base64," encoded
-                "').then(m=>{const x=m.instantiateKotoba({});"
-                "try{x.main();process.exit(2)}catch(e){console.log(e.message)}})")
-        result (run-node "node" "--input-type=module" "-e" js)]
-    (is (zero? (:exit result)) (str "exit=" (:exit result) " err=" (:err result)))
-    (is (= "fuel-exhausted\n" (:out result)))))
-
-;; Arguments are evaluated before ANY parameter is assigned. `(swap b a)` must
-;; not see the new `a` while computing the new `b`; a rewrite that assigned in
-;; place would answer 2 here instead of 1.
 (def self-tail-call-argument-order-kir
   {:format :kotoba.kir/v4 :entry 'main :exports ['main] :effects #{}
    :functions
@@ -2204,12 +2140,3 @@
     {:name 'main :params [] :param-types [] :result :i64 :effects #{}
      :body '(swap 1 1 2)}]})
 
-(deftest a-self-tail-call-evaluates-every-argument-before-assigning-any
-  (let [source (script/emit self-tail-call-argument-order-kir {:fuel 1000})
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
-        js (str "import('data:text/javascript;base64," encoded
-                "').then(m=>{const x=m.instantiateKotoba({});"
-                "console.log(String(x.main()))})")
-        result (run-node "node" "--input-type=module" "-e" js)]
-    (is (zero? (:exit result)) (str "exit=" (:exit result) " err=" (:err result)))
-    (is (= "1\n" (:out result)))))
