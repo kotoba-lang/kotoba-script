@@ -18,7 +18,7 @@
   (:require ["node:fs" :as fs]
             ["node:child_process" :as cp]
             [cljs.reader :as reader]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kotoba.script :as script]))
 
 (def dir "test/fixtures/parity")
