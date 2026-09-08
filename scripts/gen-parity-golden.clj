@@ -1,4 +1,4 @@
-(require '[kotoba.script :as script] '[clojure.string :as str] '[clojure.walk :as walk])
+(require '[kotoba.script :as script] '[kotoba.lang.text :as str] '[clojure.walk :as walk])
 (require 'kotoba.script-test)
 (def out-dir "test/fixtures/parity")
 (def doubles [0.5 1.5 100.0 0.001 0.0009 1234567.0 12345678.0 1.0E7 1.0E21 1.5E-5 123.456 9999999.0
