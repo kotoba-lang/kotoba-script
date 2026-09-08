@@ -1371,6 +1371,69 @@
                           (assoc-in kir [:functions 0 :body]
                                      (list 'typed-list-new type "wrong")))))))
 
+
+;; ---------------------------------------------------------------------------
+;; typed-list-nth -- the ACCESSOR. Added 2026-09-08.
+;;
+;; Until then this backend had `typed-list-new` (above) and `vector-count`
+;; through `vectorOrListCount`, and nothing that read an element back:
+;; `typed-list-nth` reached `emit-expr` as an unrecognised head and was refused
+;; `unsupported KIR node`. kotoba-sema has typed it since 2026-09-03 and
+;; rewrites `nth` on a `[:list T]` to it, so the head arrives from ordinary
+;; guest source; the KIR reference interpreter already executed it. Only the
+;; two backends were missing, which meant a `[:list T]` -- including every
+;; `typed-map-keys` / `typed-map-vals` projection -- could be built and counted
+;; and never read.
+(def typed-list-nth-kir
+  (let [i64-type [:list :i64]
+        string-type [:list :string]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports ['at-i64 'at-string 'make-strings] :effects #{}
+     :functions
+     [{:name 'make-strings :params [] :param-types [] :result string-type
+       :effects #{} :body (list 'typed-list-new string-type "a" "bb" "ccc")}
+      {:name 'at-i64 :params ['index] :param-types [:i64] :result :i64 :effects #{}
+       :body (list 'typed-list-nth i64-type
+                   (list 'typed-list-new i64-type 4 5 6) 'index)}
+      {:name 'at-string :params ['value 'index] :param-types [string-type :i64]
+       :result :string :effects #{}
+       :body (list 'typed-list-nth string-type 'value 'index)}]}))
+
+(deftest canonical-lists-read-an-element-back-and-trap-out-of-range
+  (let [kir typed-list-nth-kir
+        string-type [:list :string]
+        source (script/emit kir)
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        js (str "import('data:text/javascript;base64," encoded
+                "').then(m=>{const x=m.instantiateKotoba({}),v=x['make-strings']();"
+                ;; the read itself, at both ends and in the middle
+                "if(x['at-i64'](0n)!==4n||x['at-i64'](2n)!==6n)process.exit(2);"
+                "if(x['at-string'](v,0n)!=='a'||x['at-string'](v,1n)!=='bb'"
+                "||x['at-string'](v,2n)!=='ccc')process.exit(3);"
+                ;; and both ends of the range, which TRAP rather than answering
+                "try{x['at-string'](v,3n);process.exit(4)}"
+                "catch(e){if(e.message!=='list-index-out-of-range')process.exit(5)}"
+                "try{x['at-string'](v,-1n);process.exit(6)}"
+                "catch(e){if(e.message!=='list-index-out-of-range')process.exit(7)}"
+                ;; and the carrier is still validated on the way in
+                "try{x['at-string']([Object.freeze(['list','string']),[1n]],0n);process.exit(8)}"
+                "catch(e){if(e.message!=='invalid-string')process.exit(9)}})")
+        result (run-node "node" "--input-type=module" "-e" js)]
+    (is (zero? (:exit result)) (:err result))
+    (testing "the index is an i64, not a string, and the type descriptor is a list"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"expression type mismatch"
+                            (script/emit
+                             (assoc-in kir [:functions 2 :body]
+                                       (list 'typed-list-nth string-type 'value "0")))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"typed list nth requires"
+                            (script/emit
+                             (assoc-in kir [:functions 2 :body]
+                                       (list 'typed-list-nth [:set :string] 'value 'index)))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"arity"
+                            (script/emit
+                             (assoc-in kir [:functions 2 :body]
+                                       (list 'typed-list-nth string-type 'value))))))))
+
 (def bytes-kir
   {:format :kotoba.kir/v4 :entry nil :exports ['make 'identity] :effects #{}
    :functions
