@@ -1199,6 +1199,22 @@
           (doseq [item items]
             (require-type! (infer-type item env signatures) (second type) item))
           type)
+        ;; The list ACCESSOR. Until 2026-09-08 this backend had the
+        ;; constructor and `vector-count` (through `vectorOrListCount`) and no
+        ;; way to read an element back: `typed-list-nth` reached emission as an
+        ;; unrecognised head and was refused `unsupported KIR node`, so a
+        ;; `[:list T]` -- including every `typed-map-keys` / `typed-map-vals`
+        ;; projection -- could be built and counted and never read. Sema has
+        ;; typed and rewritten it (`nth` on a `[:list T]` desugars to it) since
+        ;; 2026-09-03; only the two backends were missing.
+        typed-list-nth
+        (let [[type value index] args]
+          (require-arity! op args 3) (validate-value-type! type)
+          (when-not (canonical-list-type? type)
+            (fail! "typed list nth requires [:list item-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type index env signatures) :i64 index)
+          (second type))
         hetero-vector-new
         (let [[type & items] args
               item-types (when (heterogeneous-vector-type? type) (second type))]
@@ -1542,6 +1558,9 @@
       (= op 'typed-list-new)
       (str "makeTypedList(" (type-js (first args)) ",["
            (str/join "," (map a (rest args))) "])")
+      (= op 'typed-list-nth)
+      (str "typedListNth(" (type-js (first args)) "," (a (second args)) ","
+           (a (nth args 2)) ")")
       (= op 'bytes-empty) "emptyBytes"
       (= op 'hetero-vector-new)
       (str "makeHeterogeneousVector(" (type-js (first args)) ",["
@@ -2472,6 +2491,13 @@
              "const heterogeneousVectorEqual=(t,a,b)=>sameType(assertHeterogeneousVector(t,a),assertHeterogeneousVector(t,b));"
              "const assertTypedList=(t,v)=>assertTypedValue(t,v,0,{nodes:0,listItems:0});"
              "const makeTypedList=(t,items)=>assertTypedList(t,[t,items]);"
+             ;; Traps out of range rather than answering, which is what
+             ;; sema promises for it: "typed-list-nth traps on an index out of
+             ;; range, as vector nth without a default does". `vectorAt`
+             ;; throws `vector-index-out-of-range` for the same reason.
+             "const typedListNth=(t,v,index)=>{v=assertTypedList(t,v);index=assertI64(index);"
+             "if(index<0n||index>=BigInt(v[1].length))throw new Error('list-index-out-of-range');"
+             "return v[1][Number(index)];};"
              "const vectorOrListCount=v=>{if(Array.isArray(v)&&v.length===2&&Array.isArray(v[0])&&v[0][0]==='list')"
              "return BigInt(assertTypedList(v[0],v)[1].length);return BigInt(assertVectorI64(v).length);};"
              "const cmp=(a,b)=>a<b?-1:a>b?1:0;"
