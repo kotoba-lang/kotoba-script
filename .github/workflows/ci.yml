@@ -6,6 +6,31 @@ on:
   pull_request:
 
 jobs:
+  jvm-free:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Fetch pinned integration peers
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, mkdirSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const peers = JSON.parse(readFileSync('scripts/jvm-free-peers.json', 'utf8'));
+          mkdirSync('.test-peers', { recursive: true });
+          for (const [name, sha] of Object.entries(peers)) {
+            const path = `.test-peers/${name}`;
+            execFileSync('git', ['init', path]);
+            execFileSync('git', ['-C', path, 'fetch', '--depth', '1', `https://github.com/kotoba-lang/${name}.git`, sha]);
+            execFileSync('git', ['-C', path, 'checkout', '--detach', 'FETCH_HEAD']);
+          }
+          NODE
+      - run: npm run test-jvm-free
+        env:
+          KOTOBA_TEST_PEERS_ROOT: ${{ github.workspace }}/.test-peers
   test:
     runs-on: ubuntu-latest
     steps:

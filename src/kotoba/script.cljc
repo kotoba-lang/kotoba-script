@@ -2158,6 +2158,14 @@
                 package-lock-digest trust-policy-digest
                 package-receipt-digest fuel]
          :or {fuel default-fuel}}]
+  ;; Match kotoba.kir/max-fuel without adding a dependency on the evaluator.
+  ;; The emitted counter is a JS Number: above 2^53-1 decrementing is not
+  ;; reliably exact. Validate before interpolation (including direct callers).
+  ;; nbb's compiler passes BigInt metadata; retain that exact input here.
+  (when-not (and (int-literal? fuel) (<= 1 fuel 9007199254740991))
+    (fail! "fuel must be a positive integer within the admitted ceiling"
+           {:reason :fuel-outside-admitted-range
+            :fuel fuel :maximum 9007199254740991}))
   (when-not (contains? supported-kir-formats (:format kir))
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
