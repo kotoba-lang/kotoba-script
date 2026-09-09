@@ -46,6 +46,15 @@
    :functions [{:name 'add1 :params ['x] :body '(+ x 1)}
                {:name 'main :params [] :body '(add1 41)}]})
 
+(deftest fuel-metadata-must-fit-the-exact-js-counter
+  (doseq [fuel [nil false 0 -1 1/2 1.5 Double/NaN Double/POSITIVE_INFINITY
+               9007199254740992N "Infinity" "1;throw new Error('injected')"]]
+    (let [data (try (script/emit kir {:fuel fuel}) nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :fuel-outside-admitted-range (:reason data)) (pr-str fuel))))
+  (doseq [fuel [1 512 4294967296 9007199254740991N]]
+    (is (str/includes? (script/emit kir {:fuel fuel}) (str "let fuel=" fuel ";")))))
+
 (deftest emits-and-executes-restricted-esm
   (let [source (script/emit kir)
         encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))

@@ -195,3 +195,20 @@ fallback; `vector-assoc` only replaces an existing index; `vector-conj` fails
 at capacity. Both updates return new frozen arrays and never mutate the input.
 
 Run tests with `clojure -M:test`.
+
+## JS backend design and fuel regression
+
+See [the implementation review and staged design](docs/js-backend-design-ja.md)
+for the KIR/MIR/AST boundary, runtime strategy, source maps and known parity gaps.
+`test/nbb/fuel.cljs` verifies exact fuel admission and per-instance accounting.
+`test/nbb/differential.cljs` executes the same scalar KIR through JS, Wasm and
+the reference evaluator; its pinned peer classpath is documented in the review.
+These focused checks do not qualify all language profiles or resolve the
+known synthesized-loop fuel discrepancy.
+
+The new acceptance path is JVM-independent: `npm run test-jvm-free`. It checks
+the peer SHAs in `scripts/jvm-free-peers.json` (sibling checkouts by default;
+override with `KOTOBA_TEST_PEERS_ROOT`), runs all 44 focused assertions, and
+fails if a test attempts a JVM launcher. CI fetches those exact peers without
+installing Java or Clojure. Existing JVM tests remain compatibility diagnostics;
+regenerating JVM goldens is not a prerequisite for new backend work.
