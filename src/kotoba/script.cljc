@@ -47,7 +47,17 @@
 (def ^:private max-compact-graph-items 128)
 (def ^:private max-string-index-key-bytes 65536)
 (def ^:private max-document-depth 8)
-(def ^:private max-document-nodes 256)
+;; ⚠ RESTATES `kotoba.kir.value/document-node-limit`. It is restated rather
+;; than read because these numbers are written into the generated runtime
+;; prelude as literals and an emitted module has no classpath -- not because
+;; the emitter gets to decide them. osaho decides; this follows.
+;;
+;; Raised 256 -> 4096 with osaho#88 on 2026-09-10. Measured that day: raising
+;; osaho alone let a 1057-node document COMPILE and then trap at runtime with
+;; `doc-node-limit`, because this line still said 256. The build succeeded and
+;; the artifact was wrong. kotoba-lang/amu#917 now compares the two tables, so
+;; the next drift is a red test rather than a wrong artifact.
+(def ^:private max-document-nodes 4096)
 (def ^:private max-document-container-items 32)
 (def ^:private max-document-utf8-bytes 65536)
 (def ^:private max-xml-nodes 2048)
