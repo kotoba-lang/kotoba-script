@@ -53,7 +53,7 @@ function returning one would hand the caller a value with no accessor. Every
 ## Evidence
 
 `canonical-lists-read-an-element-back-and-trap-out-of-range` in
-`test/kotoba/script_test.clj` emits a module, imports it into node as restricted
+`test/kotoba/script_test.cljk` emits a module, imports it into node as restricted
 ESM, and reads elements back at both ends and the middle, on an i64 list and a
 string list; then asserts both ends of the range trap with that exact message,
 and that a carrier holding the wrong item type is still refused on the way in.

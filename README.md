@@ -11,7 +11,7 @@ Restricted JavaScript backend for Kotoba. This package accepts only checked
 
 ## Runtimes: JVM and nbb, same bytes
 
-`src/kotoba/script.cljc` is portable. The emitter is string construction over
+`src/kotoba/script.cljk` is portable. The emitter is string construction over
 checked KIR, so it runs on the JVM and on nbb/Node and emits **the same
 module byte for byte** on both. That is what lets `amu compile --target js`
 run without a JDK (`--jvm-free`). Three seams differ per host and are marked
@@ -200,8 +200,8 @@ Run tests with `clojure -M:test`.
 
 See [the implementation review and staged design](docs/js-backend-design-ja.md)
 for the KIR/MIR/AST boundary, runtime strategy, source maps and known parity gaps.
-`test/nbb/fuel.cljs` verifies exact fuel admission and per-instance accounting.
-`test/nbb/differential.cljs` executes the same scalar KIR through JS, Wasm and
+`test/nbb/fuel.cljk` verifies exact fuel admission and per-instance accounting.
+`test/nbb/differential.cljk` executes the same scalar KIR through JS, Wasm and
 the reference evaluator; its pinned peer classpath is documented in the review.
 These focused checks do not qualify all language profiles or resolve the
 known synthesized-loop fuel discrepancy.

@@ -68,7 +68,7 @@
     (is (not (re-find ambient-access-pattern source)))))
 
 ;; Every public var below whose value is a KIR map is exported by
-;; `scripts/gen-parity-golden.clj` as a JVM golden for `test/nbb/parity.cljs`
+;; `scripts/gen-parity-golden.cljk` as a JVM golden for `test/nbb/parity.cljk`
 ;; (emit bytes must match on nbb). Fixtures whose emit is EXPECTED to throw
 ;; stay `let`-bound inside their deftest so the generator never sees them.
 ;; `^{:emit-opts …}` on a var carries the options the golden was emitted with.
@@ -2180,10 +2180,10 @@
 ;;
 ;; "aこb" is 5 UTF-8 bytes: a | e3 81 93 | b. (0,1) and (1,4) are boundaries;
 ;; (1,2) cuts inside こ.
-;; The behaviour tests over these three fixtures live in test/nbb/parity.cljs,
+;; The behaviour tests over these three fixtures live in test/nbb/parity.cljk,
 ;; not here: they need a JS engine, not a JVM, and this namespace is one of the
 ;; `clojure -M:test` sites the workspace is retiring (ADR-2609070200). The
-;; fixtures stay because scripts/gen-parity-golden.clj lifts them into goldens,
+;; fixtures stay because scripts/gen-parity-golden.cljk lifts them into goldens,
 ;; and the nbb suite reads the same fixture files -- one definition, not two.
 (def substring-boundary-kir
   {:format :kotoba.kir/v4 :entry 'main :exports ['main 'cut] :effects #{}

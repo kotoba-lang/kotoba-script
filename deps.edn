@@ -12,4 +12,4 @@
            ;; Regenerate test/fixtures/parity/ from the JVM emitter; the nbb
            ;; parity test (`npm run test-nbb`) compares against it byte for byte.
            :golden {:extra-paths ["test"]
-                    :main-opts ["scripts/gen-parity-golden.clj"]}}}
+                    :main-opts ["scripts/gen-parity-golden.cljk"]}}}

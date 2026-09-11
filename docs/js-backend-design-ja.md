@@ -13,7 +13,7 @@ release qualification ではない。以下の SHA を混同しない。
 |---|---|---|
 | kotoba | e9d3c7e659bea5a41581b98337b78d281ab8866b | `deps.edn`, `src/kotoba/launcher.clj`, launcher/language-conformance tests |
 | amu | 3ef1a709f01a672b451981de42022158fe23d1e5 | `compiler/core.clj`, `nbb/js_cli.cljs`, `backend/cljs.cljc`, `lang_conformance.clj`, `project.cljc` |
-| kotoba-script | 12a47791d1614ebf919ff8bac4c9039fa9f72e70 | `src/kotoba/script.cljc`, JVM suite, nbb parity fixtures |
+| kotoba-script | 12a47791d1614ebf919ff8bac4c9039fa9f72e70 | `src/kotoba/script.cljk`, JVM suite, nbb parity fixtures |
 | kotoba-kir | 8085b60354041752aaab7a7d0f131eab94c9d44a | `kir.cljc`: execute, invoke-function, eval-expr, max-fuel |
 | kotoba-wasm | e96234167555136c1d1bb3ac9a09b8116fa5f9de | `wasm/core.cljc`: emit, fuel-budget!, capability imports; `typed.cljc` |
 | kotoba-hir | ac8e70514ee3c9b87ae71324e6e714447acc971c | HIR schema and required function metadata |
@@ -169,14 +169,14 @@ module の総量で有利になった時だけ選択。単体サイズ、gzip、
 
 ## Differential testing と既存テスト構成
 
-`kotoba-script/test/kotoba/script_test.clj` は Node 実行を含む JVM suite。
-`test/nbb/parity.cljs` は JVM golden と nbb の生成バイトを比較する。
+`kotoba-script/test/kotoba/script_test.cljk` は Node 実行を含む JVM suite。
+`test/nbb/parity.cljk` は JVM golden と nbb の生成バイトを比較する。
 これは emitter host parity であり Wasm/KIR との意味論同値テストではない。
 `amu/lang_conformance.clj` の required/known backend は現在 KIR と wasm32。
 JS を第三の lane として加える接続点はここ。ただし Q9 の新規 acceptance は
 `amu/AGENTS.md` に従い JVM-free に実装する。
 
-今回 `test/nbb/differential.cljs` を追加し、同じ hand-built KIR を実際の
+今回 `test/nbb/differential.cljk` を追加し、同じ hand-built KIR を実際の
 `kir/execute`、`wasm/emit` + WebAssembly、`script/emit` + Node に渡す。
 8 cases × 3 engines = 24 assertions。wraparound、負の quot、lazy branch、
 division traps、通常再帰の fuel 境界を含む。これは source frontend と
@@ -237,8 +237,8 @@ Wasm の独自 i64 fuel ceiling を、この小パッチで JS の ceiling に�
 ```sh
 mkdir -p tmp
 export TMPDIR="$PWD/tmp"
-./node_modules/.bin/nbb --classpath src:../text/src test/nbb/fuel.cljs
-./node_modules/.bin/nbb --classpath src:../text/src:../kotoba-kir/src:../kotoba-hir/src:../org-nist-sha2/src:../kotoba-wasm/src test/nbb/differential.cljs
+./node_modules/.bin/nbb --classpath src:../text/src test/nbb/fuel.cljk
+./node_modules/.bin/nbb --classpath src:../text/src:../kotoba-kir/src:../kotoba-hir/src:../org-nist-sha2/src:../kotoba-wasm/src test/nbb/differential.cljk
 ```
 
 結果: fuel 3 tests / 20 assertions、differential 1 test / 24 assertions、全成功。
