@@ -13,7 +13,7 @@
   And one claim the JVM tests already make, re-made here because the cljs
   verifier is a different instrument: the emitted module runs under Node and
   answers 42n, and a module carrying an ambient global is REFUSED by the token
-  scan. Run from the repo root: `npm run test-nbb` (or `nbb test/nbb/parity.cljk`).
+  scan. Run from the repo root: `npm run test-nbb` (or `kbb --backend sci test/nbb/parity.cljk`).
   The last line is `SCANNED <n> failed <k>`; SCANNED 0 is exit 2, not a pass."
   (:require ["node:fs" :as fs]
             ["node:child_process" :as cp]
@@ -104,7 +104,7 @@
 
 ;; 4. self tail calls, run rather than compared
 ;;
-;; These three ran only under `clojure -M:test` when they landed, which put new
+;; These three ran only under `kbb -M:test` when they landed, which put new
 ;; assertions on the JVM at the moment the workspace is trying to leave it. The
 ;; behaviour needs a JS engine, not a JVM, so it belongs here: nbb emits from
 ;; the same `.cljc` and node runs the result.
