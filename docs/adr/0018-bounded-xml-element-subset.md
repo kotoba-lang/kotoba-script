@@ -24,7 +24,7 @@ Qualification requires identical reference, restricted JavaScript, and typed
 Wasm behavior, negative vectors for every rejected XML feature and limit, and
 an actual bounded URDF consumer comparison.
 
-Kotoba Script evidence is `clojure -M:test`: 39 tests and 133 assertions pass,
+Kotoba Script evidence is `kbb -M:test`: 39 tests and 133 assertions pass,
 including URDF-shaped positive queries, typed absence, every structural limit,
 and rejection of DTDs, entities, text, duplicate attributes, mismatched tags,
 processing instructions, CDATA, and trailing content. This does not qualify the

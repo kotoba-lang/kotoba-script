@@ -51,7 +51,7 @@
            "`^{:emit-opts …}` metadata; `f64.edn` pairs raw f64 bits with `Double.toString`.\n"
            "Whole-number doubles inside a fixture (`-0.0`, `##Inf`) are written as\n"
            "`#kotoba.parity/f64-bits \"<hex>\"` because the cljs EDN reader would read them as integers.\n"
-           "Regenerate after any emitter change: `clojure -M:golden`.\n\n"
+           "Regenerate after any emitter change: `kbb -M:golden`.\n\n"
            "Last generation: " (count ok) " KIR goldens, " (reduce + (map second ok)) " bytes of emitted ESM.\n"))
 (println (pr-str report))
 (println "GOLDENS" (count ok) "BYTES" (reduce + (map second ok)))

@@ -18,4 +18,4 @@ Qualification requires identical reference, restricted JavaScript, and typed
 Wasm values and bits across normal, signed-zero, subnormal, boundary, overflow,
 and halfway-adjacent corpora, followed by real URDF numeric attribute evidence.
 
-Kotoba Script evidence is `clojure -M:test`: 40 tests and 136 assertions pass.
+Kotoba Script evidence is `kbb -M:test`: 40 tests and 136 assertions pass.

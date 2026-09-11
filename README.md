@@ -30,9 +30,9 @@ carry whole-number doubles as `#kotoba.parity/f64-bits "<hex>"`, which the
 parity test reads back into the exact double.
 
 ```bash
-clojure -M:test        # JVM suite (66 tests, 229 assertions)
+kbb -M:test        # JVM suite (66 tests, 229 assertions)
 npm run test-nbb       # nbb parity: emit bytes == JVM golden for 61 KIR fixtures, Double.toString table, verifier refusals
-clojure -M:golden      # regenerate test/fixtures/parity/ from the JVM emitter after an emitter change
+kbb -M:golden      # regenerate test/fixtures/parity/ from the JVM emitter after an emitter change
 ```
 
 The golden set is every public var of `kotoba.script-test` whose value is a
@@ -194,7 +194,7 @@ as signed i64 at every exported boundary. `vector-get` has a lazy explicit
 fallback; `vector-assoc` only replaces an existing index; `vector-conj` fails
 at capacity. Both updates return new frozen arrays and never mutate the input.
 
-Run tests with `clojure -M:test`.
+Run tests with `kbb -M:test`.
 
 ## JS backend design and fuel regression
 
