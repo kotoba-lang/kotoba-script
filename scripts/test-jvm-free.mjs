@@ -24,7 +24,7 @@ try {
   for (const name of ['java', 'javac', 'clojure', 'clj']) {
     writeFileSync(join(temp, name), '#!/bin/sh\n: > "$KOTOBA_JVM_MARKER"\nexit 97\n', { mode: 0o755 });
   }
-  for (const test of ['test/nbb/fuel.cljs', 'test/nbb/differential.cljs']) {
+  for (const test of ['test/nbb/fuel.cljk', 'test/nbb/differential.cljk']) {
     const result = spawnSync(process.execPath,
       [join(root, 'node_modules/nbb/cli.js'), '--classpath', paths.join(':'), test],
       { cwd: root, stdio: 'inherit', timeout: 120000,

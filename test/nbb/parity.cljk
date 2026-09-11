@@ -1,8 +1,8 @@
 (ns test.nbb.parity
-  "JVM-free parity test for the ported emitter (`src/kotoba/script.cljc`).
+  "JVM-free parity test for the ported emitter (`src/kotoba/script.cljk`).
 
   Two claims, each against a golden the JVM emitter wrote
-  (`scripts/gen-parity-golden.clj`, `test/fixtures/parity/`):
+  (`scripts/gen-parity-golden.cljk`, `test/fixtures/parity/`):
 
   1. `emit` on nbb produces the SAME BYTES as `emit` on the JVM for every KIR
      fixture the JVM test namespace exports (with the fixture's `.opts.edn`
@@ -13,7 +13,7 @@
   And one claim the JVM tests already make, re-made here because the cljs
   verifier is a different instrument: the emitted module runs under Node and
   answers 42n, and a module carrying an ambient global is REFUSED by the token
-  scan. Run from the repo root: `npm run test-nbb` (or `nbb test/nbb/parity.cljs`).
+  scan. Run from the repo root: `npm run test-nbb` (or `nbb test/nbb/parity.cljk`).
   The last line is `SCANNED <n> failed <k>`; SCANNED 0 is exit 2, not a pass."
   (:require ["node:fs" :as fs]
             ["node:child_process" :as cp]

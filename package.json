@@ -3,8 +3,8 @@
   "private": true,
   "devDependencies": { "nbb": "1.5.212" },
   "scripts": {
-    "test-nbb": "nbb --classpath src test/nbb/parity.cljs",
-    "test-fuel": "nbb --classpath src test/nbb/fuel.cljs",
+    "test-nbb": "nbb --classpath src test/nbb/parity.cljk",
+    "test-fuel": "nbb --classpath src test/nbb/fuel.cljk",
     "test-jvm-free": "node scripts/test-jvm-free.mjs"
   }
 }
