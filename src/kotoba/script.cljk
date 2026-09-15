@@ -353,11 +353,21 @@
            :document "assertDoc("
            "assertI64(") expression ")")))
 
-(defn- closure-dispatcher? [name params]
-  (and (symbol? name)
-       (boolean (re-matches #"__kotoba_invoke(?:_[A-Za-z0-9_-]+)?\$arity[0-4]"
-                            (str name)))
-       (seq params)
+(defn- closure-dispatcher?
+  "A closure dispatcher is known by its FIRST PARAMETER, `__kotoba_closure_*`
+  -- a name only the frontend writes (the `__kotoba_` prefix is refused in
+  source). Until 2026-09-16 the function's own name had to match
+  `__kotoba_invoke*$arityN` as well, and amu's project linker renames every
+  module's dispatcher to `kotoba_module__<m>__<n>` while keeping its
+  parameters: the renamed dispatcher then guarded its closure word with
+  `assertI64` and every linked program with a closure across modules
+  trapped `invalid-i64` on this target alone (KIR interpreter, wasm32 and
+  native ran it). The frontend's `closure-param-indexes` did not cover it
+  either: refinement flows from callee to caller, and this callee only
+  reads `pair-first`. Measured through `amu test --source-path` on
+  kotoba-lang/langgraph's Kotoba core, and on a two-module `apply-twice`."
+  [_name params]
+  (and (seq params)
        (str/starts-with? (str (first params)) "__kotoba_closure_")))
 
 (defn- utf8-byte-count

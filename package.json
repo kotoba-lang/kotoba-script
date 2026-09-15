@@ -1,10 +1,13 @@
 {
   "name": "kotoba-script-tooling",
   "private": true,
-  "devDependencies": { "nbb": "1.5.212" },
+  "devDependencies": {
+    "nbb": "1.5.212"
+  },
   "scripts": {
     "test-nbb": "kbb --backend sci --classpath src test/nbb/parity.cljk",
     "test-fuel": "kbb --backend sci --classpath src test/nbb/fuel.cljk",
-    "test-jvm-free": "node scripts/test-jvm-free.mjs"
+    "test-jvm-free": "node scripts/test-jvm-free.mjs",
+    "test-linked-dispatcher": "kbb --backend sci --classpath src test/nbb/linked_dispatcher.cljk"
   }
 }
