@@ -7,4 +7,4 @@ Whole-number doubles inside a fixture (`-0.0`, `##Inf`) are written as
 `#kotoba.parity/f64-bits "<hex>"` because the cljs EDN reader would read them as integers.
 Regenerate after any emitter change: `kbb -M:golden`.
 
-Last generation: 64 KIR goldens, 3779113 bytes of emitted ESM.
+Last generation: 66 KIR goldens, 3941383 bytes of emitted ESM.

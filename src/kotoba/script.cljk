@@ -329,7 +329,17 @@
                               (str "Object.freeze([" (pr-str (str tag)) ","
                                    (type-js payload-type) "] )"))
                             (nth type 2))) "])])")))
-(defn- guard-expr [type expression]
+(defn- guard-expr
+  "The check a value of `type` passes where it crosses a function boundary.
+  `internal?` is true for a function the host cannot call (not exported, not
+  the entry): its arguments and result are values the guest already holds,
+  every one of which passed the full check where it entered, so a :string
+  needs only its type and size (`checkString`, O(1) below the limit) instead
+  of a full UTF-8 scan on every call -- which made a string-carrying loop
+  O(n^2) (kotoba-lang/kotoba-script#103). Exported functions keep the full
+  check: their parameters ARE the boundary."
+  ([type expression] (guard-expr type expression false))
+  ([type expression internal?]
   (if (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
           (canonical-list-type? type) (heterogeneous-vector-type? type) (typed-set-type? type)
           (canonical-typed-map-type? type) (record-type? type)
@@ -338,7 +348,7 @@
     (str (case type
            :f32 "assertF32("
            :f64 "assertF64("
-           :string "assertString("
+           :string (if internal? "checkString(" "assertString(")
            :keyword "assertKeyword("
            :symbol "assertSymbol("
            :map "assertMap("
@@ -351,7 +361,7 @@
            :string-index "assertStringIndex("
            :disjoint-set-i64 "assertDisjointSetI64("
            :document "assertDoc("
-           "assertI64(") expression ")")))
+           "assertI64(") expression ")"))))
 
 (defn- closure-dispatcher?
   "A closure dispatcher is known by its FIRST PARAMETER, `__kotoba_closure_*`
@@ -1744,7 +1754,7 @@
              (a (nth args 3)) ")"))
       (= op 'string-byte-length) (str "BigInt(utf8Bytes(" (a (first args)) "))")
       (= op 'string=?) (str "(" (a (first args)) "===" (a (second args)) ")")
-      (= op 'string-concat) (str "assertString(" (a (first args)) "+" (a (second args)) ")")
+      (= op 'string-concat) (str "stringConcat(" (a (first args)) "," (a (second args)) ")")
       (= op 'string-substring) (str "stringSubstring(" (a (first args)) ","
                                     (a (second args)) "," (a (nth args 2)) ")")
       (= op 'string-replace-all) (str "stringReplaceAll(" (a (first args)) ","
@@ -2213,6 +2223,7 @@
                                        i64-pair-chain-param-indexes closure-result?]}
                                (get signatures name)
                                closure-dispatcher? (closure-dispatcher? name params)
+                               internal? (not (or (some #{name} exports) (= name entry)))
                                closure-param-indexes (set closure-param-indexes)
                                i64-pair-chain-param-indexes
                                (set i64-pair-chain-param-indexes)
@@ -2228,13 +2239,13 @@
                                                                       index)
                                                          (str "assertI64PairChain("
                                                               param-js-name ")")
-                                                         (guard-expr type param-js-name)))
+                                                         (guard-expr type param-js-name internal?)))
                                                      ";"))
                                               (map vector param-js-names param-types)))]
                            (let [wrap (fn [expression]
                                         (if closure-result?
                                           (str "assertClosure(" expression ")")
-                                          (guard-expr result expression)))]
+                                          (guard-expr result expression internal?)))]
                              (if (reaches-self-tail-call? body name (count params))
                                ;; charge() and the guards stay INSIDE the loop:
                                ;; one charge and one guard pass per logical
@@ -2667,13 +2678,29 @@
              "else if(u>=56320&&u<=57343)throw new Error('invalid-utf16');else n+=3;}return n;};"
              "const assertString=v=>{if(typeof v!=='string')throw new Error('invalid-string');"
              "if(utf8Bytes(v)>" max-string-value-bytes ")throw new Error('string-too-large');return v;};"
-             "const stringReplaceAll=(value,needle,replacement)=>{value=assertString(value);"
-             "needle=assertString(needle);replacement=assertString(replacement);"
+             ;; `assertString` is the BOUNDARY check (an export argument, a host
+             ;; answer, a document from the host): type, well-formed UTF-16, size,
+             ;; by a full scan. A string the guest already holds passed it, and
+             ;; every operation below maps well-formed strings to well-formed
+             ;; strings, so an operation re-checks only the size -- and a string of
+             ;; L UTF-16 units is at most 3L UTF-8 bytes, so below the limit that is
+             ;; O(1). Re-scanning every argument and result made building a string
+             ;; by concatenation O(n^2) (kotoba-lang/kotoba-script#103).
+             "const checkString=v=>{if(typeof v!=='string')throw new Error('invalid-string');"
+             "if(v.length*3>" max-string-value-bytes "&&utf8Bytes(v)>" max-string-value-bytes ")throw new Error('string-too-large');return v;};"
+             "const stringConcat=(a,b)=>checkString(checkString(a)+checkString(b));"
+             ;; The UTF-8 bytes of the last string asked for: a guest that walks one
+             ;; string by byte offsets (substring / code-point-at in a loop) encodes
+             ;; it once, not once per step.
+             "let utf8Last=null,utf8LastBytes=null;"
+             "const utf8Of=s=>{if(utf8Last===null||s!==utf8Last){utf8LastBytes=new TextEncoder().encode(s);utf8Last=s;}return utf8LastBytes;};"
+             "const stringReplaceAll=(value,needle,replacement)=>{value=checkString(value);"
+             "needle=checkString(needle);replacement=checkString(replacement);"
              "if(needle.length===0)throw new Error('empty-string-replacement-needle');"
-             "return assertString(value.split(needle).join(replacement));};"
+             "return checkString(value.split(needle).join(replacement));};"
              "const utf8Continuation=b=>b>=128&&b<192;"
-             "const stringSubstring=(value,start,end)=>{value=assertString(value);"
-             "start=Number(start);end=Number(end);const bytes=new TextEncoder().encode(value);"
+             "const stringSubstring=(value,start,end)=>{value=checkString(value);"
+             "start=Number(start);end=Number(end);const bytes=utf8Of(value);"
              "if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>end||end>bytes.length)"
              "throw new Error('string-substring-bounds');"
              ;; The boundary violation is DECIDED, not inferred from a throw.
@@ -2692,28 +2719,30 @@
              "if(utf8Continuation(bytes[start])||(end<bytes.length&&utf8Continuation(bytes[end])))"
              "throw new Error('string-substring-code-point-boundary');"
              "return new TextDecoder('utf-8',{fatal:true}).decode(bytes.slice(start,end));};"
-             "const stringContains=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
+             "const stringContains=(value,needle)=>{value=checkString(value);needle=checkString(needle);"
              "if(needle.length===0)throw new Error('empty-string-search-needle');"
              "return value.includes(needle);};"
-             "const stringIndexOf=(value,needle)=>{value=assertString(value);needle=assertString(needle);"
+             "const stringIndexOf=(value,needle)=>{value=checkString(value);needle=checkString(needle);"
              "if(needle.length===0)throw new Error('empty-string-search-needle');"
-             "const hb=new TextEncoder().encode(value);const nb=new TextEncoder().encode(needle);"
-             "outer:for(let i=0;i+nb.length<=hb.length;i++){"
-             "for(let j=0;j<nb.length;j++){if(hb[i+j]!==nb[j])continue outer;}"
+             ;; UTF-8 is self-synchronising, so in well-formed strings the first
+             ;; byte-level match is the first UTF-16 match: search natively and
+             ;; convert the index to a byte offset (was: encode both, then a
+             ;; byte-by-byte scan of the whole haystack).
+             "const i=value.indexOf(needle);if(i>=0){"
              ;; i64 BYTE offset (guest-grammar contract: "first UTF-8 byte offset
              ;; ... -1 when absent"). Until 2026-09-06 this returned a JS Number
              ;; of CODE POINTS: wrong unit, and `i+1n` in the guest threw
              ;; "Cannot mix BigInt and other types".
-             "return BigInt(i);}"
+             "return BigInt(utf8Bytes(value.slice(0,i)));}"
              "return -1n;};"
              ;; segment count for a non-empty separator, non-overlapping -- the
              ;; wasm host's `string-split-count` (browser-host.mjs T4.2), so both
              ;; JS routes answer the same number.
-             "const stringSplitCount=(value,sep)=>{value=assertString(value);sep=assertString(sep);"
+             "const stringSplitCount=(value,sep)=>{value=checkString(value);sep=checkString(sep);"
              "if(sep.length===0)throw new Error('empty-string-split-separator');"
              "let i=0,n=1n;while(true){const idx=value.indexOf(sep,i);if(idx<0)return n;i=idx+sep.length;n+=1n;}};"
-             "const stringCodePointAt=(value,offset)=>{value=assertString(value);offset=Number(offset);"
-             "const bytes=new TextEncoder().encode(value);"
+             "const stringCodePointAt=(value,offset)=>{value=checkString(value);offset=Number(offset);"
+             "const bytes=utf8Of(value);"
              "if(!Number.isSafeInteger(offset)||offset<0||offset>=bytes.length)throw new Error('string-code-point-offset-bounds');"
              "const b0=bytes[offset];if(b0>=0x80&&b0<0xc0)throw new Error('string-code-point-boundary');"
              "let cp,width;if(b0<0x80){cp=b0;width=1;}else if(b0<0xe0){cp=b0&0x1f;width=2;}"
@@ -2721,7 +2750,7 @@
              "for(let i=1;i<width;i++){const b=bytes[offset+i];"
              "if(b===undefined||b<0x80||b>=0xc0)throw new Error('string-malformed-utf8');cp=(cp<<6)|(b&0x3f);}"
              "return BigInt(cp);};"
-             "const stringFoldCase=v=>{v=assertString(v);return assertString(v.toLowerCase());};"
+             "const stringFoldCase=v=>{v=checkString(v);return checkString(v.toLowerCase());};"
              "const assertStringIndex=v=>{if(!Array.isArray(v)||v.length>" max-compact-graph-items
              ")throw new Error('invalid-string-index');let bytes=0,previous=null;const out=v.map(e=>{"
              "if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-string-index-entry');"
@@ -2758,11 +2787,26 @@
              "return makeGenericOption(t,true,assertDisjointSetI64([parents,ranks]));};"
              "const docType=Object.freeze(['option','doc']);"
              "const docNull=Object.freeze(['null']);"
-             "const assertDoc=v=>{const state={nodes:0,bytes:0,seen:new WeakSet()};"
-             "const walk=(x,d)=>{if(d>" max-document-depth ")throw new Error('doc-depth-limit');"
+             ;; Every node this function produces is frozen, so it cannot change
+             ;; after it was checked: remember it (docChecked) and answer it as it
+             ;; is. Until 2026-09-23 every accessor -- docVectorEntries, docGet via
+             ;; docPosition, docCount, makeGenericOption on an item -- re-walked and
+             ;; re-copied the WHOLE document, so walking a 20-row document cost
+             ;; ~190 us per row (kotoba-lang/kotoba-script#103).
+             ;; Building a container still copies its children, as before: an
+             ;; output never shares a node, so a host may hand it back (or a clone
+             ;; of it) and pass the shared/cyclic check. A checked node only skips
+             ;; that check -- being frozen and built bottom-up it cannot be cyclic,
+             ;; and it may legitimately appear twice in one container (the same
+             ;; value repeated), which the copy then separates.
+             "const docChecked=new WeakSet();"
+             "const assertDoc=v=>{if(Array.isArray(v)&&docChecked.has(v))return v;"
+             "const state={nodes:0,bytes:0,seen:new WeakSet()};"
+             "const walk=(x,d,t)=>{const out=walk0(x,d,t||(Array.isArray(x)&&docChecked.has(x)));docChecked.add(out);return out;};"
+             "const walk0=(x,d,t)=>{if(d>" max-document-depth ")throw new Error('doc-depth-limit');"
              "if(!Array.isArray(x)||x.length<1||typeof x[0]!=='string')throw new Error('invalid-doc-node');"
              "if(++state.nodes>" max-document-nodes ")throw new Error('doc-node-limit');"
-             "if(state.seen.has(x))throw new Error('doc-shared-or-cyclic');state.seen.add(x);"
+             "if(!t){if(state.seen.has(x))throw new Error('doc-shared-or-cyclic');state.seen.add(x);}"
              "const tag=x[0];"
              "if(tag==='null'){if(x.length!==1)throw new Error('invalid-doc-null');return Object.freeze(['null']);}"
              "if(tag==='bool'){if(x.length!==2)return (()=>{throw new Error('invalid-doc-bool')})();return Object.freeze([tag,assertBool(x[1])]);}"
@@ -2772,21 +2816,21 @@
              "const s=tag==='string'?assertString(x[1]):tag==='keyword'?assertKeyword(x[1]):assertSymbol(x[1]);state.bytes+=utf8Bytes(s);"
              "if(state.bytes>" max-document-utf8-bytes ")throw new Error('doc-utf8-limit');return Object.freeze([tag,s]);}"
              "if(tag==='vector'||tag==='list'){if(x.length!==2||!Array.isArray(x[1])||x[1].length>" max-document-container-items
-             ")throw new Error('invalid-doc-sequence');return Object.freeze([tag,Object.freeze(x[1].map(y=>walk(y,d+1)))]);}"
+             ")throw new Error('invalid-doc-sequence');return Object.freeze([tag,Object.freeze(x[1].map(y=>walk(y,d+1,t)))]);}"
              "if(tag==='set'){if(x.length!==2||!Array.isArray(x[1])||x[1].length>" max-document-container-items
-             ")throw new Error('invalid-doc-set');const items=x[1].map(y=>walk(y,d+1));"
+             ")throw new Error('invalid-doc-set');const items=x[1].map(y=>walk(y,d+1,t));"
              "for(let i=1;i<items.length;i++)if(docCompare(items[i-1],items[i])>=0)throw new Error('noncanonical-doc-set');"
              "return Object.freeze([tag,Object.freeze(items)]);}"
              "if(tag==='map'){if(x.length!==2||!Array.isArray(x[1])||x[1].length>" max-document-container-items
              ")throw new Error('invalid-doc-map');let previous=null;const entries=x[1].map(e=>{"
              "if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-doc-entry');"
-             "if(state.seen.has(e))throw new Error('doc-shared-or-cyclic');state.seen.add(e);"
+             "if(!t){if(state.seen.has(e))throw new Error('doc-shared-or-cyclic');state.seen.add(e);}"
              "let key;if(typeof e[0]==='string'){const s=assertKeyword(e[0]);state.bytes+=utf8Bytes(s);key=Object.freeze(['keyword',s]);}"
-             "else if(Array.isArray(e[0])&&e[0].length===2&&e[0][0]==='keyword'){if(state.seen.has(e[0]))throw new Error('doc-shared-or-cyclic');state.seen.add(e[0]);const s=assertKeyword(e[0][1]);state.bytes+=utf8Bytes(s);key=Object.freeze(['keyword',s]);}else key=walk(e[0],d+1);"
+             "else if(Array.isArray(e[0])&&e[0].length===2&&e[0][0]==='keyword'){if(!t){if(state.seen.has(e[0]))throw new Error('doc-shared-or-cyclic');state.seen.add(e[0]);}const s=assertKeyword(e[0][1]);state.bytes+=utf8Bytes(s);key=Object.freeze(['keyword',s]);}else key=walk(e[0],d+1,t);"
              "if(state.bytes>" max-document-utf8-bytes ")throw new Error('doc-utf8-limit');"
              "if(previous!==null&&docMapKeyCompare(previous,key)>=0)throw new Error('noncanonical-doc-map');"
-             "previous=key;return Object.freeze([key,walk(e[1],d+1)]);});return Object.freeze([tag,Object.freeze(entries)]);}"
-             "throw new Error('unknown-doc-tag');};return walk(v,0);};"
+             "previous=key;return Object.freeze([key,walk(e[1],d+1,t)]);});return Object.freeze([tag,Object.freeze(entries)]);}"
+             "throw new Error('unknown-doc-tag');};return walk(v,0,false);};"
              "const makeDocScalar=(tag,value)=>assertDoc([tag,value]);"
              "const makeDocVector=items=>assertDoc(['vector',items.map(item=>assertDoc(item))]);"
              "const makeDocList=items=>assertDoc(['list',items.map(item=>assertDoc(item))]);"

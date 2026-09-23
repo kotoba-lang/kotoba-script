@@ -1719,6 +1719,61 @@
     (is (str/includes? source "const docKind="))
     (is (str/includes? source "const docEqual="))))
 
+(def validate-once-kir
+  ;; kotoba-lang/kotoba-script#103: a value is checked where it ENTERS the
+  ;; guest, not again on every operation. These pin both halves: the checks
+  ;; that must stay (the boundary, the limits, no shared nodes in an output)
+  ;; and the one that must go (re-copying a document the guest produced).
+  (let [functions
+        [{:name 'id :params ['d] :param-types [:document] :result :document :effects #{} :body 'd}
+         {:name 'count-of :params ['d] :param-types [:document] :result :i64 :effects #{}
+          :body '(document-count d)}
+         {:name 'make :params [] :param-types [] :result :document :effects #{}
+          :body '(document-vector (document-string "a") (document-string "b"))}
+         {:name 'twice :params ['d] :param-types [:document] :result :document :effects #{}
+          :body '(document-vector d d)}
+         {:name 'echo :params ['s] :param-types [:string] :result :string :effects #{} :body 's}
+         ;; substring / code-point-at remember the UTF-8 bytes of the LAST string:
+         ;; alternate two strings of different widths so a stale memo would show
+         {:name 'alternate :params ['a 'b] :param-types [:string :string] :result :string :effects #{}
+          :body '(string-concat (string-substring a 0 3)
+                   (string-concat (string-substring b 0 1) (string-substring a 3 6)))}
+         {:name 'alternate-cp :params ['a 'b] :param-types [:string :string] :result :i64 :effects #{}
+          :body '(+ (string-byte-length (string-substring a 0 3)) (string-code-point-at b 1))}
+         ;; the length, not the string: nothing crosses the boundary as a string, so
+         ;; only the INTERNAL size check can stop an over-limit build
+         {:name 'build-length :params ['n] :param-types [:i64] :result :i64 :effects #{}
+          :body '(string-byte-length (build-from 0 n ""))}
+         {:name 'build-from :params ['i 'n 'acc] :param-types [:i64 :i64 :string] :result :string
+          :effects #{} :body '(if (>= i n) acc (build-from (+ i 1) n (string-concat acc "0123456789")))}]]
+    {:format :kotoba.kir/v4 :entry nil
+     :exports '[id count-of make twice echo alternate alternate-cp build-length] :effects #{} :functions functions}))
+
+(deftest values-are-checked-where-they-enter-not-on-every-operation
+  (let [source (script/emit validate-once-kir {:fuel 100000})
+        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        result
+        (run-node
+         "node" "--input-type=module" "-e"
+         (str "import('data:text/javascript;base64," encoded "').then(m=>{"
+              "const x=m.instantiateKotoba({});const throws=(f,msg)=>{try{f()}catch(e){return e.message===msg}return false;};"
+              ;; a document the guest produced is answered as it is -- not re-walked, not re-copied
+              "const d=x.make();if(x.id(d)!==d||x.count_of===undefined&&x['count-of'](d)!==2n)process.exit(11);"
+              ;; a host array is still checked and copied, and the copy is then trusted
+              "const raw=['vector',[['string','a']]];const r=x.id(raw);if(r===raw||!Object.isFrozen(r)||x.id(r)!==r)process.exit(12);"
+              ;; the shared/cyclic check still refuses a HOST array that shares a node
+              "const c=['string','c'];if(!throws(()=>x.id(['vector',[c,c]]),'doc-shared-or-cyclic'))process.exit(13);"
+              ;; a checked node may repeat; the output copies it apart (no shared node leaves the guest)
+              "const two=x.twice(d);if(two[1].length!==2||two[1][0]===two[1][1])process.exit(14);"
+              "const hv=x.id(['vector',[d,d]]);if(hv[1][0]===hv[1][1])process.exit(15);"
+              ;; the boundary still checks strings in full; an internal loop still enforces the size limit
+              "if(!throws(()=>x.echo('\\uD800'),'invalid-utf16'))process.exit(16);"
+              "if(x.alternate('日本語','xé')!=='日x本'||x['alternate-cp']('日本語','xé')!==236n)process.exit(19);"
+              "if(x['build-length'](6553n)!==65530n)process.exit(17);"
+              "if(!throws(()=>x['build-length'](6554n),'string-too-large'))process.exit(18);"
+              "})"))]
+    (is (zero? (:exit result)) (str (:exit result) " " (:err result)))))
+
 (def document-sha256-kir
   (let [functions
         [{:name 'null-digest :params [] :param-types [] :result :string :effects #{}
