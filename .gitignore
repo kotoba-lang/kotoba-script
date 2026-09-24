@@ -2,3 +2,4 @@
 /target/
 /.clj-kondo/.cache/
 node_modules/
+.nbb/
