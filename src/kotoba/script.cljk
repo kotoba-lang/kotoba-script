@@ -31,14 +31,25 @@
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :symbol :map :bool :bytes :option-i64 :result-i64
                              :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
-(def ^:private max-string-literal-bytes 4096)
+;; Every number below is kotoba-lang `lang/limits.edn` (adr-2609242100 P1),
+;; restated because the emitted prelude carries them as literals and an
+;; emitted module has no classpath. amu `value_bounds_agreement_test` compares
+;; each one against amu's vendored copy of that table.
+;;
+;; 2026-09-24: `max-string-literal-bytes` 4096 -> 65536 (osaho's literal bound
+;; since 2026-09-11: a literal is a value) and `max-type-depth` 8 -> 12
+;; (osaho ADR 0025's ADT depth; `assertTypedValue` trapped `adt-depth-limit`
+;; on a value the reference interpreter admitted). `max-vector-items` stays
+;; 16384: it is this runtime's per-vector BUDGET (`:profile/esm`), not the
+;; language's 2^24 -- the ESM runtime copies on write.
+(def ^:private max-string-literal-bytes 65536)
 (def ^:private max-string-value-bytes 65536)
 (def ^:private max-bytes-value-bytes 65536)
 (def ^:private max-keyword-bytes 512)
 (def ^:private max-map-entries 128)
 (def ^:private max-vector-items 16384)
 (def ^:private max-canonical-list-items 16384)
-(def ^:private max-type-depth 8)
+(def ^:private max-type-depth 12)
 (def ^:private max-type-nodes 64)
 (def ^:private max-variant-cases 32)
 (def ^:private max-heterogeneous-vector-items 32)
