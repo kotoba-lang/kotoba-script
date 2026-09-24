@@ -1080,6 +1080,32 @@
             (require-type! value-type :i64 value-form))
           :map)
 
+      ;; `:bytes` as a guest value and the string constructor (2026-09-25,
+      ;; superproject adr-2609242330). Same typing as kotoba-sema's frontend
+      ;; and the same run-time refusals, by the same names, as osaho's
+      ;; reference interpreter: `bytes/*`, `utf8/*`, `string/too-large`.
+      (= op 'bytes-count)
+      (do (require-arity! op args 1) (require-type! (first types) :bytes (first args)) :i64)
+      (= op 'bytes-at)
+      (do (require-arity! op args 2)
+          (require-type! (first types) :bytes (first args))
+          (require-type! (second types) :i64 (second args)) :i64)
+      (= op 'bytes-slice)
+      (do (require-arity! op args 3)
+          (require-type! (first types) :bytes (first args))
+          (require-type! (second types) :i64 (second args))
+          (require-type! (nth types 2) :i64 (nth args 2)) :bytes)
+      (= op 'bytes-concat)
+      (do (require-arity! op args 2)
+          (require-type! (first types) :bytes (first args))
+          (require-type! (second types) :bytes (second args)) :bytes)
+      (= op 'bytes-from-vector-i64)
+      (do (require-arity! op args 1) (require-type! (first types) :vector-i64 (first args)) :bytes)
+      (= op 'vector-i64-from-bytes)
+      (do (require-arity! op args 1) (require-type! (first types) :bytes (first args)) :vector-i64)
+      (= op 'string-from-utf8)
+      (do (require-arity! op args 1) (require-type! (first types) :bytes (first args)) :string)
+
       (contains? signatures op)
       (let [{expected :param-types result :result} (get signatures op)]
         (when-not (= (count expected) (count types))
@@ -1644,6 +1670,13 @@
       (str "typedListNth(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")")
       (= op 'bytes-empty) "emptyBytes"
+      (= op 'bytes-count) (str "bytesCount(" (a (first args)) ")")
+      (= op 'bytes-at) (str "bytesAt(" (a (first args)) "," (a (second args)) ")")
+      (= op 'bytes-slice) (str "bytesSlice(" (a (nth args 0)) "," (a (nth args 1)) "," (a (nth args 2)) ")")
+      (= op 'bytes-concat) (str "bytesConcat(" (a (first args)) "," (a (second args)) ")")
+      (= op 'bytes-from-vector-i64) (str "bytesFromVectorI64(" (a (first args)) ")")
+      (= op 'vector-i64-from-bytes) (str "vectorI64FromBytes(" (a (first args)) ")")
+      (= op 'string-from-utf8) (str "stringFromUtf8(" (a (first args)) ")")
       (= op 'hetero-vector-new)
       (str "makeHeterogeneousVector(" (type-js (first args)) ",["
            (str/join "," (map a (rest args))) "])")
@@ -2008,9 +2041,11 @@
      vector-alloc vector-drop vector-take vector-f64-new vector-f64-conj
      vector-f64-assoc vector-f64-drop vector-f64-take string-index-new
      string-index-assoc disjoint-set-i64-new disjoint-set-i64-union
-     document-vector document-list document-set document-map})
+     document-vector document-list document-set document-map
+     bytes-slice bytes-concat bytes-from-vector-i64 vector-i64-from-bytes})
 (def ^:private byte-producing-ops
-  '#{string-concat string-substring string-replace-all string-fold-case string-upper})
+  '#{string-concat string-substring string-replace-all string-fold-case string-upper
+     string-from-utf8})
 
 (defn emit-expr
   ([form env functions]
@@ -2779,6 +2814,39 @@
              "const out=v.slice();out[Number(i)]=assertI64(item);return makeVector(out);};"
              "const vectorConj=(v,item)=>{v=assertVectorI64(v);if(v.length>=" max-vector-items
              ")throw new Error('vector-too-large');return makeVector([...v,assertI64(item)]);};"
+             ;; `:bytes` (2026-09-25): the guest byte string. A Uint8Array,
+             ;; never mutated after it is built, so a slice may share nothing
+             ;; and still be cheap. Trap names are osaho's reference names.
+             "const bytesCount=b=>BigInt(assertBytes(b).length);"
+             "const bytesAt=(b,i)=>{b=assertBytes(b);i=assertI64(i);"
+             "if(i<0n||i>=BigInt(b.length))throw new Error('bytes/index-out-of-range');return BigInt(b[Number(i)]);};"
+             "const bytesSlice=(b,s,e)=>{b=assertBytes(b);s=assertI64(s);e=assertI64(e);"
+             "if(s<0n||s>e||e>BigInt(b.length))throw new Error('bytes/slice-bounds');return b.slice(Number(s),Number(e));};"
+             "const bytesConcat=(a,b)=>{a=assertBytes(a);b=assertBytes(b);"
+             "if(a.length+b.length>" max-bytes-value-bytes ")throw new Error('bytes/too-large');"
+             "const o=new Uint8Array(a.length+b.length);o.set(a,0);o.set(b,a.length);return o;};"
+             "const bytesFromVectorI64=v=>{v=assertVectorI64(v);"
+             "if(v.length>" max-bytes-value-bytes ")throw new Error('bytes/too-large');"
+             "const o=new Uint8Array(v.length);for(let i=0;i<v.length;i++){const x=v[i];"
+             "if(x<0n||x>255n)throw new Error('bytes/item-out-of-range');o[i]=Number(x);}return o;};"
+             "const vectorI64FromBytes=b=>{b=assertBytes(b);return makeVector(Array.from(b,x=>BigInt(x)));};"
+             ;; The same walk, in the same order, as osaho's
+             ;; `kotoba.kir.value/utf8-invalid-at`: the FIRST bad sequence is
+             ;; named, and E0 80 is overlong (the second byte's range is decided
+             ;; before the rest is looked for), not truncated.
+             "const utf8InvalidAt=b=>{const n=b.length;let i=0;while(i<n){const b0=b[i];"
+             "if(b0<0x80){i++;continue;}if(b0<0xc0)return 'utf8/unexpected-continuation';"
+             "if(b0<0xc2)return 'utf8/overlong';if(b0>0xf4)return 'utf8/invalid-byte';"
+             "if(i+1>=n)return 'utf8/truncated';const b1=b[i+1];const k=b0<0xe0?1:b0<0xf0?2:3;"
+             "if((b1&0xc0)!==0x80)return 'utf8/bad-continuation';"
+             "if(b0===0xe0&&b1<0xa0)return 'utf8/overlong';if(b0===0xf0&&b1<0x90)return 'utf8/overlong';"
+             "if(b0===0xed&&b1>=0xa0)return 'utf8/surrogate';if(b0===0xf4&&b1>=0x90)return 'utf8/above-max';"
+             "for(let j=2;j<=k;j++){if(i+j>=n)return 'utf8/truncated';if((b[i+j]&0xc0)!==0x80)return 'utf8/bad-continuation';}"
+             "i+=k+1;}return null;};"
+             "const stringFromUtf8=b=>{b=assertBytes(b);"
+             "if(b.length>" max-string-value-bytes ")throw new Error('string/too-large');"
+             "const bad=utf8InvalidAt(b);if(bad!==null)throw new Error(bad);"
+             "return checkString(new TextDecoder('utf-8',{fatal:true}).decode(b));};"
              "const makeVectorF64=items=>{if(!Array.isArray(items))throw new Error('invalid-vector-f64');"
              "if(items.length>" max-vector-items ")throw new Error('vector-f64-too-large');"
              "return Object.freeze(items.map(assertF64));};"
