@@ -8,6 +8,7 @@
     "test-nbb": "kbb --backend sci --classpath src test/nbb/parity.cljk",
     "test-fuel": "kbb --backend sci --classpath src test/nbb/fuel.cljk",
     "test-jvm-free": "node scripts/test-jvm-free.mjs",
-    "test-linked-dispatcher": "kbb --backend sci --classpath src test/nbb/linked_dispatcher.cljk"
+    "test-linked-dispatcher": "kbb --backend sci --classpath src test/nbb/linked_dispatcher.cljk",
+    "test-boundary": "kbb --backend sci --classpath src test/nbb/boundary.cljk"
   }
 }
