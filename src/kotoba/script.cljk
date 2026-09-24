@@ -345,6 +345,35 @@
                               (str "Object.freeze([" (pr-str (str tag)) ","
                                    (type-js payload-type) "] )"))
                             (nth type 2))) "])])")))
+(defn- adt-guard-type?
+  "A type whose value is a tree (and so whose full check is a walk)."
+  [type]
+  (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
+      (canonical-list-type? type) (heterogeneous-vector-type? type) (typed-set-type? type)
+      (canonical-typed-map-type? type) (record-type? type)
+      (schema-ref-type? type)))
+
+(defn- export-wrapper
+  "The host-facing entry for export `name`: where a tree-typed argument or
+  result crosses the trust boundary, walked in full once (`assertTypedValue`,
+  iterative, against the traversal budget -- adr-2609242100 P3). A function
+  with no tree-typed parameter or result is exported as itself, unchanged."
+  [name {:keys [param-types result]}]
+  (let [params (vec (map-indexed (fn [i _] (str "a" i)) param-types))]
+    (if (some adt-guard-type? (conj (vec param-types) result))
+      (let [call (str (js-name name) "("
+                      (str/join "," (map (fn [p t]
+                                           (if (adt-guard-type? t)
+                                             (str "assertTypedValue(" (type-js t) "," p ")")
+                                             p))
+                                         params param-types))
+                      ")")]
+        (str "(" (str/join "," params) ")=>"
+             (if (adt-guard-type? result)
+               (str "assertTypedValue(" (type-js result) "," call ")")
+               call)))
+      (js-name name))))
+
 (defn- guard-expr
   "The check a value of `type` passes where it crosses a function boundary.
   `internal?` is true for a function the host cannot call (not exported, not
@@ -360,11 +389,13 @@
           (canonical-list-type? type) (heterogeneous-vector-type? type) (typed-set-type? type)
           (canonical-typed-map-type? type) (record-type? type)
           (schema-ref-type? type))
-    ;; P3 (adr-2609242100): the full walk only where the host can call in;
-    ;; an internal call checks the tag, never the whole value.
-    (if internal?
-      (str "assertOperand(" (type-js type) "," expression ")")
-      (str "assertTypedValue(" (type-js type) "," expression ")"))
+    ;; P3 (adr-2609242100): a call inside the module checks the tag, never
+    ;; the whole value -- EVERY call, an exported function's included: the
+    ;; host reaches an export through `export-wrapper`, which walks a tree
+    ;; argument or result once. Guarding the export's own body with the walk
+    ;; made a loop helper re-walk its accumulator on every iteration (and an
+    ;; exported helper every argument on every internal call): O(n^2).
+    (str "assertOperand(" (type-js type) "," expression ")")
     (str (case type
            :f32 "assertF32("
            :f64 "assertF64("
@@ -3118,5 +3149,5 @@
              "const result=f(request,Object.freeze({request:requestType,result:resultType}));"
              "return assertTypedValue(resultType,result);};\n"
              function-source "\n"
-             "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (js-name f))) exports)) "});\n}\n")]
+             "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (export-wrapper f (get signatures f)))) exports)) "});\n}\n")]
     (verify-output! source))))
