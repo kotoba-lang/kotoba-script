@@ -49,6 +49,11 @@
 (def ^:private max-map-entries 128)
 (def ^:private max-vector-items 16384)
 (def ^:private max-canonical-list-items 16384)
+;; The boundary traversal budget (kotoba-lang lang/limits.edn
+;; :language/boundary; P3 of adr-2609242100): what one full walk of an
+;; untrusted value may visit and read.
+(def ^:private boundary-traversal-nodes 65536)
+(def ^:private boundary-traversal-bytes 1048576)
 (def ^:private max-type-depth 12)
 (def ^:private max-type-nodes 64)
 (def ^:private max-variant-cases 32)
@@ -355,7 +360,11 @@
           (canonical-list-type? type) (heterogeneous-vector-type? type) (typed-set-type? type)
           (canonical-typed-map-type? type) (record-type? type)
           (schema-ref-type? type))
-    (str "assertTypedValue(" (type-js type) "," expression ",0,{nodes:0})")
+    ;; P3 (adr-2609242100): the full walk only where the host can call in;
+    ;; an internal call checks the tag, never the whole value.
+    (if internal?
+      (str "assertOperand(" (type-js type) "," expression ")")
+      (str "assertTypedValue(" (type-js type) "," expression ")"))
     (str (case type
            :f32 "assertF32("
            :f64 "assertF64("
@@ -2457,90 +2466,121 @@
              "const resultValue=(v,fallback)=>{v=assertResultI64(v);return v[0]?v[1]:assertI64(fallback());};"
              "const resultError=(v,fallback)=>{v=assertResultI64(v);return v[0]?assertI64(fallback()):v[1];};"
              "const sameType=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((x,i)=>sameType(x,b[i])));"
-             "const assertTypedValue=(t,v,d,s)=>{if(++s.nodes>" max-type-nodes
-             ")throw new Error('adt-node-limit');if(d>" max-type-depth
-             ")throw new Error('adt-depth-limit');if(t==='i64')return assertI64(v);if(t==='f32')return assertF32(v);if(t==='f64')return assertF64(v);"
-             "if(t==='string')return assertString(v);if(t==='keyword')return assertKeyword(v);"
-             "if(t==='map')return assertMap(v);if(t==='bool')return assertBool(v);if(t==='bytes')return assertBytes(v);"
-             "if(t==='option-i64')return assertOptionI64(v);if(t==='result-i64')return assertResultI64(v);"
-             "if(t==='vector-i64')return assertVectorI64(v);"
-             "if(t==='vector-f64')return assertVectorF64(v);"
-             "if(t==='string-index')return assertStringIndex(v);"
-             "if(t==='disjoint-set-i64')return assertDisjointSetI64(v);"
-             "if(t==='doc')return assertDoc(v);"
+             ;; P3 of superproject adr-2609242100: a typed value is walked in
+             ;; full ONCE, at a trust boundary (an exported function's
+             ;; parameters, a capability result), by an explicit-stack
+             ;; iterative walk against a traversal budget -- `budget/boundary-
+             ;; nodes` / `budget/boundary-bytes` (lang/limits.edn
+             ;; :language/boundary). Inside the module a constructor checks only
+             ;; its own node and the tags of its immediate operands
+             ;; (`shallowTyped`), and an internal call only the tag
+             ;; (`assertOperand`). There is no depth or node limit on a value.
+             ;; `typedNode` answers one node: `[value]` for a leaf, or
+             ;; `[null, children, build]`.
+             "const chargeBoundary=(s,n)=>{if(s===null)return;s.bytes+=n;if(s.bytes>" boundary-traversal-bytes
+             ")throw new Error('budget/boundary-bytes');};"
+             "const typedNode=(t,v,s)=>{if(t==='i64')return [assertI64(v)];if(t==='f32')return [assertF32(v)];if(t==='f64')return [assertF64(v)];"
+             "if(t==='string'){v=assertString(v);chargeBoundary(s,utf8Bytes(v));return [v];}"
+             "if(t==='keyword'){v=assertKeyword(v);chargeBoundary(s,utf8Bytes(v));return [v];}"
+             "if(t==='map')return [assertMap(v)];if(t==='bool')return [assertBool(v)];"
+             "if(t==='bytes'){v=assertBytes(v);chargeBoundary(s,v.byteLength);return [v];}"
+             "if(t==='option-i64')return [assertOptionI64(v)];if(t==='result-i64')return [assertResultI64(v)];"
+             "if(t==='vector-i64')return [assertVectorI64(v)];"
+             "if(t==='vector-f64')return [assertVectorF64(v)];"
+             "if(t==='string-index')return [assertStringIndex(v)];"
+             "if(t==='disjoint-set-i64')return [assertDisjointSetI64(v)];"
+             "if(t==='doc')return [assertDoc(v)];"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='list'){"
              "if(!Array.isArray(v)||v.length!==2||!sameType(v[0],t)||!Array.isArray(v[1])||v[1].length>"
              max-canonical-list-items ")throw new Error('invalid-typed-list');"
-             "s.listItems=(s.listItems||0)+v[1].length;if(s.listItems>" max-canonical-list-items
-             ")throw new Error('typed-list-item-limit');"
-             "const items=v[1].map(x=>assertTypedValue(t[1],x,d+1,s));"
-             "return Object.freeze([t,Object.freeze(items)]);}"
+             "return [null,v[1].map(x=>[t[1],x]),items=>Object.freeze([t,Object.freeze(items)])];}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='vector'&&Array.isArray(t[1])){"
              "if(t[1].length>" max-heterogeneous-vector-items
              "||!Array.isArray(v)||v.length!==t[1].length+1||!sameType(v[0],t))"
-             "throw new Error('invalid-heterogeneous-vector');const out=[t];"
-             "for(let i=0;i<t[1].length;i++)out.push(assertTypedValue(t[1][i],v[i+1],d+1,s));"
-             "return Object.freeze(out);}"
+             "throw new Error('invalid-heterogeneous-vector');"
+             "return [null,t[1].map((it,i)=>[it,v[i+1]]),items=>Object.freeze([t,...items])];}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='set'){"
              "if(!Array.isArray(v)||v.length!==2||!sameType(v[0],t)||!Array.isArray(v[1])||v[1].length>"
              max-set-items ")throw new Error('invalid-typed-set');"
-             "const items=v[1].map(x=>assertTypedValue(t[1],x,d+1,s));"
+             "return [null,v[1].map(x=>[t[1],x]),built=>{const items=built.slice();"
              "items.sort((a,b)=>compareTyped(t[1],a,b));"
              "for(let i=1;i<items.length;i++)if(compareTyped(t[1],items[i-1],items[i])===0)"
-             "throw new Error('duplicate-set-item');return Object.freeze([t,Object.freeze(items)]);}"
+             "throw new Error('duplicate-set-item');return Object.freeze([t,Object.freeze(items)]);}];}"
              "if(Array.isArray(t)&&t.length===3&&t[0]==='map'){"
              "if(!Array.isArray(v)||v.length!==2||!sameType(v[0],t)||!Array.isArray(v[1])||v[1].length>"
              max-typed-map-entries ")throw new Error('invalid-typed-map');"
-             "const entries=v[1].map(e=>{if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-typed-map-entry');"
-             "return Object.freeze([assertTypedValue(t[1],e[0],d+1,s),assertTypedValue(t[2],e[1],d+1,s)]);});"
+             "const kids=[];for(const e of v[1]){if(!Array.isArray(e)||e.length!==2)throw new Error('invalid-typed-map-entry');"
+             "kids.push([t[1],e[0]],[t[2],e[1]]);}"
+             "return [null,kids,flat=>{const entries=[];for(let i=0;i<flat.length;i+=2)entries.push(Object.freeze([flat[i],flat[i+1]]));"
              "entries.sort((a,b)=>compareTyped(t[1],a[0],b[0]));"
              "for(let i=1;i<entries.length;i++)if(compareTyped(t[1],entries[i-1][0],entries[i][0])===0)"
-             "throw new Error('duplicate-map-key');return Object.freeze([t,Object.freeze(entries)]);}"
+             "throw new Error('duplicate-map-key');return Object.freeze([t,Object.freeze(entries)]);}];}"
              "if(Array.isArray(t)&&t.length===3&&t[0]==='record'){"
              "if(!Array.isArray(t[2])||t[2].length<1||t[2].length>" max-record-fields
              "||!Array.isArray(v)||v.length!==t[2].length+1||!sameType(v[0],t))"
-             "throw new Error('invalid-record');const out=[t];"
-             "for(let i=0;i<t[2].length;i++)out.push(assertTypedValue(t[2][i][1],v[i+1],d+1,s));"
-             "return Object.freeze(out);}"
+             "throw new Error('invalid-record');"
+             "return [null,t[2].map((f,i)=>[f[1],v[i+1]]),items=>Object.freeze([t,...items])];}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='option'){"
              "if(!Array.isArray(v)||!sameType(v[0],t)||typeof v[1]!=='boolean'||"
              "(v[1]&&v.length!==3)||(!v[1]&&v.length!==2))throw new Error('invalid-generic-option');"
-             "return v[1]?Object.freeze([t,true,assertTypedValue(t[1],v[2],d+1,s)]):Object.freeze([t,false]);}"
+             "return v[1]?[null,[[t[1],v[2]]],p=>Object.freeze([t,true,p[0]])]:[Object.freeze([t,false])];}"
              "if(Array.isArray(t)&&t.length===3&&t[0]==='result'){"
              "if(!Array.isArray(v)||v.length!==2||typeof v[0]!=='boolean')throw new Error('invalid-parametric-result');"
-             "const p=v[0]?t[1]:t[2];return Object.freeze([v[0],assertTypedValue(p,v[1],d+1,s)]);}"
+             "return [null,[[v[0]?t[1]:t[2],v[1]]],p=>Object.freeze([v[0],p[0]])];}"
              "if(Array.isArray(t)&&t.length===3&&t[0]==='variant'){"
              "if(!Array.isArray(v)||v.length!==3||!sameType(v[0],t)||typeof v[1]!=='string')throw new Error('invalid-variant');"
              "const c=t[2].find(c=>c[0]===v[1]);if(!c)throw new Error('unknown-variant-case');"
-             "return Object.freeze([t,v[1],assertTypedValue(c[1],v[2],d+1,s)]);}"
+             "return [null,[[c[1],v[2]]],p=>Object.freeze([t,v[1],p[0]])];}"
              "if(Array.isArray(t)&&t.length===2&&t[0]==='ref'){"
              "if(!Array.isArray(v)||!Array.isArray(v[0])||(v[0][0]!=='variant'&&v[0][0]!=='record')||v[0][1]!==t[1])"
              "throw new Error('invalid-schema-ref');"
-             "return assertTypedValue(v[0],v,d,s);}"
+             "return typedNode(v[0],v,s);}"
              "throw new Error('invalid-type-descriptor');};"
-             "const assertParametricResult=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             ;; The boundary walk: post-order over an explicit stack, so no JS
+             ;; recursion depth depends on the value.
+             "const assertTypedValue=(t,v)=>{const s={nodes:0,bytes:0};"
+             "const visit=(t,v)=>{if(++s.nodes>" boundary-traversal-nodes ")throw new Error('budget/boundary-nodes');return typedNode(t,v,s);};"
+             "const root=visit(t,v);if(root.length===1)return root[0];const stack=[[root[1],root[2],[]]];"
+             "for(;;){const top=stack[stack.length-1];const i=top[2].length;"
+             "if(i<top[0].length){const n=visit(top[0][i][0],top[0][i][1]);if(n.length===1)top[2].push(n[0]);else stack.push([n[1],n[2],[]]);}"
+             "else{const built=top[1](top[2]);stack.pop();if(stack.length===0)return built;stack[stack.length-1][2].push(built);}}};"
+             ;; O(1): the value carries the tag its type declares. Never walks.
+             "const operandTag=(t,v)=>{if(t==='i64')return typeof v==='bigint';if(t==='f32'||t==='f64')return typeof v==='number';"
+             "if(t==='string')return typeof v==='string';if(t==='keyword')return typeof v==='string'&&v[0]===':';"
+             "if(t==='bool')return typeof v==='boolean';if(t==='bytes')return v instanceof Uint8Array;"
+             "if(t==='vector-i64'||t==='vector-f64')return Array.isArray(v)||linearValues.has(v);"
+             "if(typeof t==='string')return Array.isArray(v);"
+             "if(!Array.isArray(t)||!Array.isArray(v))return false;"
+             "if(t[0]==='ref')return Array.isArray(v[0])&&v[0][1]===t[1];"
+             "if(t[0]==='result')return v.length===2&&typeof v[0]==='boolean';"
+             "return sameType(v[0],t);};"
+             "const assertOperand=(t,v)=>{if(!operandTag(t,v)){if(typeof t==='string')typedNode(t,v,null);throw new Error('invalid-operand');}return v;};"
+             ;; A constructor: this node in full, its operands by tag only.
+             "const shallowTyped=(t,v)=>{const n=typedNode(t,v,null);if(n.length===1)return n[0];"
+             "return n[2](n[1].map(c=>assertOperand(c[0],c[1])));};"
+             "const assertParametricResult=(t,v)=>shallowTyped(t,v);"
              "const makeParametricResult=(t,tag,payload)=>assertParametricResult(t,[tag,payload]);"
              "const parametricResultValue=(t,v,fallback)=>{v=assertParametricResult(t,v);"
-             "return v[0]?v[1]:assertTypedValue(t[1],fallback(),1,{nodes:0});};"
+             "return v[0]?v[1]:shallowTyped(t[1],fallback());};"
              "const parametricResultError=(t,v,fallback)=>{v=assertParametricResult(t,v);"
-             "return v[0]?assertTypedValue(t[2],fallback(),1,{nodes:0}):v[1];};"
+             "return v[0]?shallowTyped(t[2],fallback()):v[1];};"
              "const parametricResultMatch=(t,v,ok,err)=>{v=assertParametricResult(t,v);"
              "return v[0]?ok(v[1]):err(v[1]);};"
-             "const makeVariant=(t,tag,payload)=>assertTypedValue(t,[t,tag,payload],0,{nodes:0});"
-             "const matchVariant=(t,v,branches)=>{v=assertTypedValue(t,v,0,{nodes:0});"
+             "const makeVariant=(t,tag,payload)=>shallowTyped(t,[t,tag,payload]);"
+             "const matchVariant=(t,v,branches)=>{v=shallowTyped(t,v);"
              "const b=branches.find(b=>b[0]===v[1]);if(!b)throw new Error('unknown-variant-case');return b[1](v[2]);};"
-             "const assertGenericOption=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const assertGenericOption=(t,v)=>shallowTyped(t,v);"
              "const makeGenericOption=(t,some,payload)=>assertGenericOption(t,some?[t,true,payload]:[t,false]);"
              "const genericOptionValue=(t,v,fallback)=>{v=assertGenericOption(t,v);"
-             "return v[1]?v[2]:assertTypedValue(t[1],fallback(),1,{nodes:0});};"
+             "return v[1]?v[2]:shallowTyped(t[1],fallback());};"
              "const matchGenericOption=(t,v,none,some)=>{v=assertGenericOption(t,v);return v[1]?some(v[2]):none();};"
-             "const assertHeterogeneousVector=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const assertHeterogeneousVector=(t,v)=>shallowTyped(t,v);"
              "const makeHeterogeneousVector=(t,items)=>assertHeterogeneousVector(t,[t,...items]);"
              "const heterogeneousVectorAt=(t,v,i)=>assertHeterogeneousVector(t,v)[i+1];"
              "const heterogeneousVectorAssoc=(t,v,i,item)=>{v=assertHeterogeneousVector(t,v);"
              "const out=v.slice();out[i+1]=item;return assertHeterogeneousVector(t,out);};"
              "const heterogeneousVectorEqual=(t,a,b)=>sameType(assertHeterogeneousVector(t,a),assertHeterogeneousVector(t,b));"
-             "const assertTypedList=(t,v)=>assertTypedValue(t,v,0,{nodes:0,listItems:0});"
+             "const assertTypedList=(t,v)=>shallowTyped(t,v);"
              "const makeTypedList=(t,items)=>assertTypedList(t,[t,items]);"
              ;; Traps out of range rather than answering, which is what
              ;; sema promises for it: "typed-list-nth traps on an index out of
@@ -2578,20 +2618,20 @@
              "if(!sameType(a[0],b[0]))throw new Error('schema-ref-type-mismatch');"
              "return compareTyped(a[0],a,b);}"
              "throw new Error('unordered-value-type');};"
-             "const assertTypedSet=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const assertTypedSet=(t,v)=>shallowTyped(t,v);"
              "const makeTypedSet=(t,items)=>assertTypedSet(t,[t,items]);"
-             "const typedSetContains=(t,v,item)=>{v=assertTypedSet(t,v);item=assertTypedValue(t[1],item,1,{nodes:0});"
+             "const typedSetContains=(t,v,item)=>{v=assertTypedSet(t,v);item=shallowTyped(t[1],item);"
              "return v[1].some(x=>compareTyped(t[1],x,item)===0);};"
-             "const typedSetConj=(t,v,item)=>{v=assertTypedSet(t,v);item=assertTypedValue(t[1],item,1,{nodes:0});"
+             "const typedSetConj=(t,v,item)=>{v=assertTypedSet(t,v);item=shallowTyped(t[1],item);"
              "if(v[1].some(x=>compareTyped(t[1],x,item)===0))return v;"
              "if(v[1].length>=" max-set-items ")throw new Error('set-too-large');return makeTypedSet(t,[...v[1],item]);};"
-             "const typedSetDisj=(t,v,item)=>{v=assertTypedSet(t,v);item=assertTypedValue(t[1],item,1,{nodes:0});"
+             "const typedSetDisj=(t,v,item)=>{v=assertTypedSet(t,v);item=shallowTyped(t[1],item);"
              "return makeTypedSet(t,v[1].filter(x=>compareTyped(t[1],x,item)!==0));};"
              "const typedSetEqual=(t,a,b)=>{a=assertTypedSet(t,a);b=assertTypedSet(t,b);"
              "return a[1].length===b[1].length&&a[1].every((x,i)=>compareTyped(t[1],x,b[1][i])===0);};"
-             "const assertTypedMap=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const assertTypedMap=(t,v)=>shallowTyped(t,v);"
              "const makeTypedMap=(t,entries)=>assertTypedMap(t,[t,entries]);"
-             "const typedMapIndex=(t,v,key)=>{v=assertTypedMap(t,v);key=assertTypedValue(t[1],key,1,{nodes:0});"
+             "const typedMapIndex=(t,v,key)=>{v=assertTypedMap(t,v);key=shallowTyped(t[1],key);"
              "return [v,v[1].findIndex(e=>compareTyped(t[1],e[0],key)===0),key];};"
              "const typedMapContains=(t,v,key)=>typedMapIndex(t,v,key)[1]>=0;"
              "const typedMapGet=(t,v,key)=>{const [m,i]=typedMapIndex(t,v,key),ot=Object.freeze(['option',t[2]]);"
@@ -2601,20 +2641,20 @@
              "if(index<0n||index>=BigInt(v[1].length))return makeGenericOption(ot,false,null);"
              "const e=v[1][Number(index)];return makeGenericOption(ot,true,Object.freeze([et,e[0],e[1]]));};"
              "const typedMapAssoc=(t,v,key,item)=>{const [m,i,k]=typedMapIndex(t,v,key);"
-             "item=assertTypedValue(t[2],item,1,{nodes:0});if(i<0&&m[1].length>=" max-typed-map-entries
+             "item=shallowTyped(t[2],item);if(i<0&&m[1].length>=" max-typed-map-entries
              ")throw new Error('map-too-large');const out=m[1].slice();if(i<0)out.push([k,item]);else out[i]=[k,item];"
              "return makeTypedMap(t,out);};"
              "const typedMapDissoc=(t,v,key)=>{const [m,i]=typedMapIndex(t,v,key);"
              "return i<0?m:makeTypedMap(t,m[1].filter((_,j)=>j!==i));};"
              "const typedMapEqual=(t,a,b)=>{a=assertTypedMap(t,a);b=assertTypedMap(t,b);"
              "return compareTyped(t,a,b)===0;};"
-             "const assertRecord=(t,v)=>assertTypedValue(t,v,0,{nodes:0});"
+             "const assertRecord=(t,v)=>shallowTyped(t,v);"
              "const makeRecord=(t,values)=>assertRecord(t,[t,...values]);"
              "const recordFieldIndex=(t,field)=>{const i=t[2].findIndex(f=>f[0]===field);"
              "if(i<0)throw new Error('unknown-record-field');return i;};"
              "const recordGet=(t,v,field)=>{v=assertRecord(t,v);return v[recordFieldIndex(t,field)+1];};"
              "const recordAssoc=(t,v,field,value)=>{v=assertRecord(t,v);const i=recordFieldIndex(t,field);"
-             "const out=v.slice();out[i+1]=assertTypedValue(t[2][i][1],value,1,{nodes:0});return assertRecord(t,out);};"
+             "const out=v.slice();out[i+1]=shallowTyped(t[2][i][1],value);return assertRecord(t,out);};"
              "const recordEqual=(t,a,b)=>{a=assertRecord(t,a);b=assertRecord(t,b);"
              "return compareList(t[2].map(f=>f[1]),a.slice(1),b.slice(1))===0;};"
              "const valueEqual=(a,b)=>{if(Array.isArray(a)!==Array.isArray(b))return false;"
@@ -3072,9 +3112,11 @@
              "const callTypedCapability=(id,requestType,resultType,request)=>{"
              "const f=grants[id];"
              "if(typeof f!=='function')throw new Error('capability-denied:'+id);"
-             "request=assertTypedValue(requestType,request,0,{nodes:0});"
+             ;; The request is built inside the module (its node and operand
+             ;; tags only); the RESULT crosses the trust boundary: walked in full.
+             "request=shallowTyped(requestType,request);"
              "const result=f(request,Object.freeze({request:requestType,result:resultType}));"
-             "return assertTypedValue(resultType,result,0,{nodes:0});};\n"
+             "return assertTypedValue(resultType,result);};\n"
              function-source "\n"
              "return Object.freeze({" (str/join "," (map (fn [f] (str "'" f "':" (js-name f))) exports)) "});\n}\n")]
     (verify-output! source))))
