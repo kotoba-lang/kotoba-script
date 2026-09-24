@@ -1,5 +1,5 @@
 (ns kotoba.script-test
-  (:require [kotoba.test :refer [deftest is run-tests testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is run-tests testing]]
             [clojure.java.shell :as shell]
             [kotoba.lang.text :as str]
             [kotoba.script :as script])
@@ -57,7 +57,7 @@
 
 (deftest emits-and-executes-restricted-esm
   (let [source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.main()!==42n)process.exit(2);console.log('42')})")
@@ -83,7 +83,7 @@
 
 (deftest do-emits-in-order-and-returns-its-last-value
   (let [source (script/emit do-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.value()!=='done')process.exit(2);"
@@ -112,7 +112,7 @@
 (deftest compiler-closure-dispatchers-guard-the-physical-pair-handle
   (let [closure-kir closure-dispatcher-kir
         source (script/emit closure-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.main()!=='done')process.exit(2)})")
@@ -138,7 +138,7 @@
 (deftest closure-parameter-refinements-guard-nondispatcher-functions
   (let [closure-kir closure-refinement-kir
         source (script/emit closure-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.main()!==7n)process.exit(2);"
@@ -193,7 +193,7 @@
 (deftest i64-pair-chain-parameter-refinements-are-checked
   (let [program pair-chain-kir
         source (script/emit program)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.main()!==7n)process.exit(2);"
@@ -250,7 +250,7 @@
 
 (deftest lexical-bindings-have-unique-js-names
   (let [source (script/emit shadow-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.shadow(-5n)!==5n)process.exit(2);"
@@ -282,7 +282,7 @@
 
 (deftest i32-wrapping-shift-and-xorshift-profile-is-explicit
   (let [source (script/emit i32-profile-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.signed(4294967295n)!==-1n||x.unsigned(-1n)!==4294967295n)process.exit(2);"
@@ -321,7 +321,7 @@
 
 (deftest floating-point-f64-bit-profile-is-explicit-and-sealed
   (let [source (script/emit f64-bits-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.bits(1.5)!==4609434218613702656n)process.exit(2);"
@@ -368,7 +368,7 @@
 
 (deftest f64-arithmetic-has-explicit-ieee-special-value-semantics
   (let [source (script/emit f64-arithmetic-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -407,7 +407,7 @@
 
 (deftest f64-i64-conversions-distinguish-exact-rounded-and-truncating
   (let [source (script/emit f64-i64-conversion-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -454,7 +454,7 @@
 
 (deftest f32-is-an-explicitly-rounded-scalar-profile
   (let [source (script/emit f32-profile-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -493,7 +493,7 @@
 
 (deftest floating-sqrt-min-max-have-sealed-special-value-semantics
   (let [source (script/emit float-sqrt-min-max-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -516,7 +516,7 @@
 
 (deftest bounded-trigonometry-has-a-deterministic-error-contract
   (let [source (script/emit quarter-turn-trig-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -541,7 +541,7 @@
 
 (deftest bounded-wide-angle-trigonometry-has-explicit-range-reduction
   (let [source (script/emit bounded-trig-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -567,7 +567,7 @@
 
 (deftest bounded-exp-and-log-have-fixed-polynomial-contracts
   (let [source (script/emit near-zero-exp-log-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -591,7 +591,7 @@
 
 (deftest bounded-atan2-has-a-fixed-finite-domain-contract
   (let [source (script/emit atan2-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -613,7 +613,7 @@
 
 (deftest wide-exp-and-log-use-fixed-binary-scaling
   (let [source (script/emit wide-exp-log-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -647,7 +647,7 @@
 
 (deftest typed-cap-call-i64-hosts-as-call-capability
   (let [source (script/emit typed-cap-call-i64-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({7:(_v)=>99});"
                 "if(x.main()!==99n)process.exit(2)})")
@@ -679,7 +679,7 @@
 
 (deftest typed-cap-call-interns-host-document-and-variant-results
   (let [source (script/emit typed-cap-call-variant-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({24:(req,contract)=>{"
                 "if(req[1]!==':facet-enter')process.exit(3);"
@@ -690,7 +690,7 @@
     (is (str/includes? source "callTypedCapability(24,"))
     (is (zero? (:exit probe)) (:err probe)))
   (let [source (script/emit typed-cap-call-string-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({4:(v)=>v+'!'});"
                 "if(x.main()!=='x!')process.exit(2)})")
@@ -768,7 +768,7 @@
 
 (deftest equality-between-pair-values-and-scalars-is-false
   (let [source (script/emit pair-equality-v3-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{if(m.instantiateKotoba({}).main()!==2n)process.exit(2)})")
         result (run-node "node" "--input-type=module" "-e" js)]
@@ -776,7 +776,7 @@
 
 (deftest explicit-exports-hide-internal-functions
   (let [source (script/emit explicit-exports-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.main()!==42n||Object.hasOwn(x,'add1'))process.exit(2)})")
@@ -788,7 +788,7 @@
 
 (deftest library-module-needs-exports-but-not-an-entry
   (let [source (script/emit library-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(m.kotobaArtifact.entry!==null||x.add1(41n)!==42n)process.exit(2)})")
@@ -811,7 +811,7 @@
 
 (deftest typed-bounded-strings-preserve-values-through-the-frozen-api
   (let [source (script/emit bounded-strings-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.greet('言葉')!=='こんにちは、言葉')process.exit(2);"
@@ -853,7 +853,7 @@
 
 (deftest bounded-string-replacement-is-literal-and-fails-closed
   (let [source (script/emit string-replace-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.replace('a.$a.$','.','$')!=='a$$a$$')process.exit(2);"
@@ -887,7 +887,7 @@
 
 (deftest bounded-string-contains-and-case-fold-compose-for-case-insensitive-search
   (let [source (script/emit string-contains-fold-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.contains('final decision made','decision')!==true)process.exit(2);"
@@ -916,7 +916,7 @@
 
 (deftest string-code-point-at-decodes-utf8-at-byte-offset
   (let [source (script/emit string-code-point-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 ;; "aあ𝟘0": a@0=0x61, あ@1=0x3042(3B), 𝟘@4=0x1d7d8(4B), 0@8=0x30
@@ -958,7 +958,7 @@
 
 (deftest typed-keywords-preserve-canonical-text-without-hashing
   (let [source (script/emit keywords-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.identity(':安全/確認')!==':安全/確認')process.exit(2);"
@@ -988,7 +988,7 @@
 
 (deftest typed-bounded-maps-use-canonical-persistent-keyword-entries
   (let [source (script/emit bounded-maps-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "const before=[[':a',1n]];const after=x.update(before);"
@@ -1019,7 +1019,7 @@
 
 (deftest typed-booleans-and-options-never-use-js-truthiness-or-null-sentinels
   (let [source (script/emit bool-option-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "const none=Object.freeze([false]);const some=Object.freeze([true,7n]);"
@@ -1059,7 +1059,7 @@
 
 (deftest bounded-result-i64-has-closed-tags-payloads-and-lazy-fallbacks
   (let [source (script/emit result-i64-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});const ok=[true,7n],err=[false,12n];"
                 "if(x['ok?'](ok)!==true||x['ok?'](err)!==false)process.exit(2);"
@@ -1093,7 +1093,7 @@
 
 (deftest parametric-result-validates-nested-payload-types-and-budgets
   (let [source (script/emit parametric-result-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.text([true,'安全'])!=='安全'||x.text([false,9n])!=='fallback')process.exit(2);"
@@ -1132,7 +1132,7 @@
                        :body (list 'result-match-of type 'r 'text 'text 'code 'code)})
         executable result-match-kir
         source (script/emit executable)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "if(x.describe([true,'安全'])!==6n||x.describe([false,17n])!==17n)process.exit(2)})")
@@ -1163,7 +1163,7 @@
         branches variant-status-branches
         kir variant-kir
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "const t=Object.freeze(['variant',':demo/status',Object.freeze([Object.freeze([':ready','i64']),Object.freeze([':failed','string'])])]);"
@@ -1201,7 +1201,7 @@
   (let [type [:option :string]
         kir generic-option-kir
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),t=Object.freeze(['option','string']);"
                 "const s=x.some(),n=x.none();if(s[1]!==true||s[2]!=='安全'||n[1]!==false)process.exit(2);"
@@ -1258,7 +1258,7 @@
   (let [type [:vector [:i64 :string :bool]]
         kir hetero-vector-kir
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "const t=Object.freeze(['vector',Object.freeze(['i64','string','bool'])]);"
@@ -1278,7 +1278,7 @@
 
 (deftest structured-f64-values-preserve-nan-and-signed-zero
   (let [source (script/emit structured-f64-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded "').then(m=>{"
@@ -1331,7 +1331,7 @@
   (let [type [:set :i64]
         kir typed-set-kir
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),t=Object.freeze(['set','i64']);"
                 "const a=x.make(),b=x.add(a,4n),c=x.remove(b,2n);"
@@ -1367,7 +1367,7 @@
   (let [type [:list :i64]
         kir typed-list-kir
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),v=x.make();"
                 "if(x['count-items'](v)!==3n||v[1].join(',')!=='4,5,6'||!Object.isFrozen(v[1]))process.exit(2);"
@@ -1412,7 +1412,7 @@
   (let [kir typed-list-nth-kir
         string-type [:list :string]
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),v=x['make-strings']();"
                 ;; the read itself, at both ends and in the middle
@@ -1453,7 +1453,7 @@
 
 (deftest canonical-empty-bytes-cross-restricted-esm-boundaries
   (let [source (script/emit bytes-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),empty=x.make(),value=new Uint8Array([1,2,3]);"
                 "if(!(empty instanceof Uint8Array)||empty.byteLength!==0||x.identity(value)!==value)process.exit(2);"
@@ -1491,7 +1491,7 @@
         option-type [:option :string]
         kir record-kir
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),v=x.make(),u=x.birthday(v,8n);"
                 "if(x['name-of'](v)!=='Kotoba'||v[2]!==7n||u[2]!==8n||v[2]!==7n)process.exit(2);"
@@ -1553,7 +1553,7 @@
 
 (deftest bounded-vector-i64-is-frozen-indexed-and-persistent
   (let [source (script/emit vector-i64-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});const before=[1n,2n];"
                 "const fixture=Array.from({length:12171},(_,i)=>BigInt(i&255));"
@@ -1573,7 +1573,7 @@
     (is (str/includes? source "vectorLimits:Object.freeze({items:16384})"))
     (is (str/includes? source "const makeVector=")))
   (let [source (script/emit vector-at-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
                               "').then(m=>{try{m.instantiateKotoba({}).at([1n]);process.exit(2)}"
@@ -1610,7 +1610,7 @@
 
 (deftest bounded-vector-f64-preserves-ieee-values-and-persistence
   (let [source (script/emit vector-f64-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),v=x.make();"
                 "if(x['count-items'](v)!==3n||!Object.is(v[0],-0)||!Number.isNaN(v[1])||v[2]!==1.5)process.exit(2);"
@@ -1651,7 +1651,7 @@
 
 (deftest compact-string-index-and-disjoint-set-are-bounded-and-persistent
   (let [source (script/emit string-index-disjoint-set-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
                               "').then(m=>{const x=m.instantiateKotoba({}),i=x.index(),d=x.joined();"
@@ -1696,7 +1696,7 @@
 
 (deftest bounded-canonical-documents-are-persistent-and-reject-host-objects
   (let [source (script/emit document-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result
         (run-node
          "node" "--input-type=module" "-e"
@@ -1751,7 +1751,7 @@
 
 (deftest values-are-checked-where-they-enter-not-on-every-operation
   (let [source (script/emit validate-once-kir {:fuel 100000})
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result
         (run-node
          "node" "--input-type=module" "-e"
@@ -1793,7 +1793,7 @@
 
 (deftest document-sha256-is-stable-and-content-sensitive
   (let [source (script/emit document-sha256-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         ;; golden for single-byte encoding of document-null ("n")
         null-hex "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9"
         result
@@ -1864,7 +1864,7 @@
 
 (deftest bounded-document-textual-edn-roundtrips-and-rejects-reader-authority
   (let [source (script/emit document-edn-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -1916,7 +1916,7 @@
 
 (deftest bounded-document-vectors-have-safe-persistent-operations
   (let [source (script/emit document-vector-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -1939,7 +1939,7 @@
 
 (deftest bounded-keywords-can-be-created-from-safe-runtime-text
   (let [source (script/emit keyword-from-string-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node "node" "--input-type=module" "-e"
                          (str "import('data:text/javascript;base64," encoded
                               "').then(m=>{if(m.instantiateKotoba({})['context-key']()!==':@context')process.exit(2)})"))]
@@ -2015,7 +2015,7 @@
 
 (deftest bounded-typed-maps-execute-with-canonical-keys-and-typed-absence
   (let [source (script/emit typed-map-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -2043,7 +2043,7 @@
 
 (deftest typed-map-keys-and-vals-project-in-entry-order
   (let [source (script/emit typed-map-keys-vals-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -2078,9 +2078,9 @@
 
 (deftest bounded-xml-subset-has-exact-path-text-and-typed-absence-semantics
   (let [source (script/emit xml-subset-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         xml "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- bounded --><!DOCTYPE html><html><robot name=\"cart\"><link name=\"base\"> Hello <span>bounded</span> XML </link><link name='tip'/><joint name=\"slide\" type=\"prismatic\"><parent link=\"base\"/><child link=\"tip\"/></joint></robot></html>"
-        xml64 (.encodeToString (java.util.Base64/getEncoder) (.getBytes xml "UTF-8"))
+        xml64 (kbytes/base64-encode (kbytes/utf8-bytes xml))
         invalid ["<!DOCTYPE robot><robot/>"
                  "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\"><html/>"
                  "<!DOCTYPE html SYSTEM \"about:legacy-compat\"><html/>"
@@ -2098,8 +2098,8 @@
                       (str/join " " (map #(str "a" % "=\"x\"") (range 33)))
                       "/>")
                  (str "<robot>" (apply str (repeat 2048 "<n/>")) "</robot>")]
-        invalid64 (mapv #(.encodeToString (java.util.Base64/getEncoder)
-                                         (.getBytes ^String % "UTF-8")) invalid)
+        invalid64 (mapv #(kbytes/base64-encode
+                                         (kbytes/utf8-bytes ^String %)) invalid)
         invalid-js (str "[" (str/join "," (map pr-str invalid64)) "]")
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),xml=Buffer.from('" xml64 "','base64').toString();"
@@ -2132,7 +2132,7 @@
 
 (deftest bounded-decimal-f64-parser-is-finite-typed-and-preserves-negative-zero
   (let [source (script/emit decimal-f64-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         valid ["0" "-0" "+1.5" "-2.4" ".5" "1." "6.022e23"
                "1e-324" "5e-324" "1.7976931348623157e308"]
         invalid ["" " " "NaN" "Infinity" "-Infinity" "0x10" "1_000"
@@ -2159,7 +2159,7 @@
 
 (deftest bounded-decimal-f64x3-parser-is-fixed-width-and-atomic
   (let [source (script/emit decimal-f64x3-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({}),ok=x.parse(' -0  1.5\\t5e-324 ');"
                 "if(!ok[1]||!Object.is(ok[2][1],-0)||ok[2][2]!==1.5||ok[2][3]!==Number.MIN_VALUE)process.exit(2);"
@@ -2179,7 +2179,7 @@
 
 (deftest typed-symbol-construction-is-validated
   (let [source (script/emit symbol-kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         result (run-node
                 "node" "--input-type=module" "-e"
                 (str "import('data:text/javascript;base64," encoded
@@ -2211,7 +2211,7 @@
   ;; string-split-count was not emitted at all ("unsupported KIR operation").
   (let [kir string-index-of-kir
         source (script/emit kir)
-        encoded (.encodeToString (java.util.Base64/getEncoder) (.getBytes source "UTF-8"))
+        encoded (kbytes/base64-encode (kbytes/utf8-bytes source))
         js (str "import('data:text/javascript;base64," encoded
                 "').then(m=>{const x=m.instantiateKotoba({});"
                 "console.log(String(x['byte-offset']())+' '+String(x.absent())+' '+String(x.segments()))})")
