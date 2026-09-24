@@ -139,13 +139,13 @@
   ;; this is the assertion that says the safety property survived.
   (swap! scanned inc)
   (let [[out err] (run-module kir {:fuel 100})]
-    (if (= "THREW:fuel-exhausted" out)
+    (if (= "THREW:budget/fuel" out)
       (ok! "the loop is still charged once per call (fuel 100 stops it)")
       (fail! "self tail call fuel" (str out " " err))))
   ;; and the rewrite is targeted: only the self-recursive function loops.
   (swap! scanned inc)
   (let [[_ _ src] (run-module kir {:fuel 100})]
-    (if (and (re-find #"function k\$countdown\([^)]*\)\{while\(true\)\{charge\(\);" src)
+    (if (and (re-find #"function k\$countdown\([^)]*\)\{enter\(\);try\{while\(true\)\{charge\(\);" src)
              (not (re-find #"function k\$main\([^)]*\)\{while" src)))
       (ok! "only the self-recursive function became a loop")
       (fail! "self tail call shape" "countdown should loop and main should not"))))
