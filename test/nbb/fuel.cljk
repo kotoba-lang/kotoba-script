@@ -35,10 +35,10 @@
              "\nconst a=instantiateKotoba();"
              "if(a.main(2n)!==42n)throw Error('wrong-value');"
              "try{a.main(0n);throw Error('missed-trap');}"
-             "catch(e){if(e.message!=='fuel-exhausted')throw e;}"
+             "catch(e){if(e.message!=='budget/fuel')throw e;}"
              "const b=instantiateKotoba();"
              "try{b.main(3n);throw Error('missed-tail-charge');}"
-             "catch(e){if(e.message!=='fuel-exhausted')throw e;}"
+             "catch(e){if(e.message!=='budget/fuel')throw e;}"
              "if(instantiateKotoba().main(0n)!==42n)throw Error('shared-fuel');"))
       (let [r (cp/spawnSync js/process.execPath #js [file]
                            #js {:encoding "utf8" :timeout 10000})]
