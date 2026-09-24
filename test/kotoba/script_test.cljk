@@ -1,5 +1,5 @@
 (ns kotoba.script-test
-  (:require [clojure.test :refer [deftest is run-tests testing]]
+  (:require [kotoba.test :refer [deftest is run-tests testing]]
             [clojure.java.shell :as shell]
             [kotoba.lang.text :as str]
             [kotoba.script :as script])
