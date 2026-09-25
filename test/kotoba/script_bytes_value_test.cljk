@@ -4,7 +4,7 @@
   refusal is pinned by the reference interpreter's trap name -- the ESM
   prelude's `Error.message`. Runs on nbb (the JDK-free host) as well as the
   JVM."
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [kotoba.script :as script]
             #?@(:cljs [["node:child_process" :as child]
                        ["node:fs" :as fs]
@@ -29,11 +29,11 @@
   "Emit KIR, run JS against it under Node, answer {:exit :out :err}."
   [js]
   #?(:clj (let [dir (java.nio.file.Files/createTempDirectory "kotoba-script-bytes" (make-array java.nio.file.attribute.FileAttribute 0))
-                module (java.io.File. (.toFile dir) "m.mjs")
-                main (java.io.File. (.toFile dir) "run.mjs")]
+                module (kio/file (.toFile dir) "m.mjs")
+                main (kio/file (.toFile dir) "run.mjs")]
             (spit module (script/emit kir))
             (spit main (str "import * as m from './m.mjs';" js))
-            (let [p (.start (ProcessBuilder. ["node" (.getPath main)]))
+            (let [p (.start (ProcessBuilder. ["node" (kio/path main)]))
                   out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
               {:exit (.waitFor p) :out out :err err}))
      :cljs (let [dir (fs/mkdtempSync (path/join (os/tmpdir) "kotoba-script-bytes-"))
