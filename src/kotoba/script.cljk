@@ -675,6 +675,17 @@
           (require-type! (nth types 0) :vector-i64 (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
 
+      ;; `vector-take`, the head mirror of `vector-drop` (and the frontend's
+      ;; `pop`), with its f64 twin below. Declared in KIR, evaluated by the
+      ;; reference and listed in `cell-constructor-ops`, but never typed or
+      ;; emitted here, so any module that popped a vector failed ESM with
+      ;; "unsupported KIR operation" (measured 2026-09-26 on amu posix_path,
+      ;; superproject adr-2609242330 selfhost stage 2).
+      (= op 'vector-take)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-i64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :vector-i64)
+
       (= op 'vector-assoc)
       (do (require-arity! op args 3)
           (require-type! (nth types 0) :vector-i64 (nth args 0))
@@ -722,6 +733,11 @@
           (require-type! (nth types 1) :i64 (nth args 1)) :f64)
 
       (= op 'vector-f64-drop)
+      (do (require-arity! op args 2)
+          (require-type! (nth types 0) :vector-f64 (nth args 0))
+          (require-type! (nth types 1) :i64 (nth args 1)) :vector-f64)
+
+      (= op 'vector-f64-take)
       (do (require-arity! op args 2)
           (require-type! (nth types 0) :vector-f64 (nth args 0))
           (require-type! (nth types 1) :i64 (nth args 1)) :vector-f64)
@@ -1761,6 +1777,7 @@
                               (a (nth args 2)) ")")
       (= op 'vector-at) (str "vectorAt(" (a (nth args 0)) "," (a (nth args 1)) ")")
       (= op 'vector-drop) (str "vectorDrop(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'vector-take) (str "vectorTake(" (a (nth args 0)) "," (a (nth args 1)) ")")
       (= op 'vector-assoc) (str "vectorAssoc(" (a (nth args 0)) "," (a (nth args 1)) ","
                                 (a (nth args 2)) ")")
       (= op 'vector-conj) (str "vectorConj(" (a (nth args 0)) "," (a (nth args 1)) ")")
@@ -1773,6 +1790,7 @@
                                   (a (nth args 2)) ")")
       (= op 'vector-f64-at) (str "vectorF64At(" (a (nth args 0)) "," (a (nth args 1)) ")")
       (= op 'vector-f64-drop) (str "vectorF64Drop(" (a (nth args 0)) "," (a (nth args 1)) ")")
+      (= op 'vector-f64-take) (str "vectorF64Take(" (a (nth args 0)) "," (a (nth args 1)) ")")
       (= op 'vector-f64-assoc) (str "vectorF64Assoc(" (a (nth args 0)) "," (a (nth args 1)) ","
                                     (a (nth args 2)) ")")
       (= op 'vector-f64-conj) (str "vectorF64Conj(" (a (nth args 0)) "," (a (nth args 1)) ")")
@@ -2809,6 +2827,8 @@
              "if(i<0n||i>=BigInt(v.length))throw new Error('vector-index-out-of-range');return v[Number(i)];};"
              "const vectorDrop=(v,n)=>{v=assertVectorI64(v);n=assertI64(n);"
              "if(n<0n||n>BigInt(v.length))throw new Error('vector-drop-out-of-range');return makeVector(v.slice(Number(n)));};"
+             "const vectorTake=(v,n)=>{v=assertVectorI64(v);n=assertI64(n);"
+             "if(n<0n||n>BigInt(v.length))throw new Error('vector-take-out-of-range');return makeVector(v.slice(0,Number(n)));};"
              "const vectorAssoc=(v,i,item)=>{v=assertVectorI64(v);i=assertI64(i);"
              "if(i<0n||i>=BigInt(v.length))throw new Error('vector-index-out-of-range');"
              "const out=v.slice();out[Number(i)]=assertI64(item);return makeVector(out);};"
@@ -2857,6 +2877,8 @@
              "if(i<0n||i>=BigInt(v.length))throw new Error('vector-f64-index-out-of-range');return v[Number(i)];};"
              "const vectorF64Drop=(v,n)=>{v=assertVectorF64(v);n=assertI64(n);"
              "if(n<0n||n>BigInt(v.length))throw new Error('vector-f64-drop-out-of-range');return makeVectorF64(v.slice(Number(n)));};"
+             "const vectorF64Take=(v,n)=>{v=assertVectorF64(v);n=assertI64(n);"
+             "if(n<0n||n>BigInt(v.length))throw new Error('vector-f64-take-out-of-range');return makeVectorF64(v.slice(0,Number(n)));};"
              "const vectorF64Assoc=(v,i,item)=>{v=assertVectorF64(v);i=assertI64(i);"
              "if(i<0n||i>=BigInt(v.length))throw new Error('vector-f64-index-out-of-range');"
              "const out=v.slice();out[Number(i)]=assertF64(item);return makeVectorF64(out);};"
