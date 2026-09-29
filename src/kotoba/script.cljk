@@ -54,8 +54,8 @@
 ;; untrusted value may visit and read.
 (def ^:private boundary-traversal-nodes 65536)
 (def ^:private boundary-traversal-bytes 1048576)
-(def ^:private max-type-depth 12)
-(def ^:private max-type-nodes 64)
+(def ^:private max-type-depth 32)
+(def ^:private max-type-nodes 512)
 (def ^:private max-variant-cases 32)
 (def ^:private max-heterogeneous-vector-items 32)
 (def ^:private max-set-items 32)
