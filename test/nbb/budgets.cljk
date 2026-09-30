@@ -71,6 +71,17 @@
   (is (= "4" (run deep "{frames:6}")))
   (is (= "THREW:budget/frames" (run deep "{frames:5}"))))
 
+;; amu ADR 0353 point 7 (floor :allocation-budget-targets): a constructor
+;; debits FUEL as well as a cell, as kotoba.kir does, so fuel bounds what a run
+;; builds whether or not cells are metered. build-five pays 12 entries (main,
+;; build x6, kons x5) and 11 constructors: 23. Before, 12 answered.
+(deftest constructors-charge-fuel
+  (is (= "1" (run build-five "{fuel:23}")))
+  (is (= "THREW:budget/fuel" (run build-five "{fuel:22}")))
+  (is (= "THREW:budget/fuel" (run build-five "{fuel:12}")))
+  (is (= "THREW:budget/cells" (run build-five "{fuel:23,cells:10}"))
+      "the cells ledger still traps by its own name"))
+
 (deftest a-budget-outside-its-range-is-refused
   (is (= "THREW:budget-outside-admitted-range:cells" (run deep "{cells:0}")))
   (is (= :frames-outside-admitted-range

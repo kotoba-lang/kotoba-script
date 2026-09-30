@@ -3268,7 +3268,8 @@
                           ;; P4 of adr-2609242100: the four budgets of the ESM profile, one
              ;; unit each, named traps, the emitted value the default and the
              ;; embedder's `instantiateKotoba(grants, budgets)` the per-run
-             ;; override. fuel = function entries, cells = aggregate nodes
+             ;; override. fuel = function entries and one unit per constructed
+             ;; aggregate (amu ADR 0353 point 7), cells = aggregate nodes
              ;; constructed (the reference interpreter's KIR heads, charged
              ;; at the same point), bytes = UTF-8 bytes of produced strings,
              ;; frames = call depth. null = not metered.
@@ -3280,7 +3281,11 @@
              (str "let bytes=budgetValue('bytes'," (or bytes "null") ");")
              (str "const framesLimit=budgetValue('frames'," frames ");let frames=0;")
              "const charge=()=>{fuel--;if(fuel<0)throw new Error('budget/fuel');};"
-             "const cell=()=>{if(cells!==null&&--cells<0)throw new Error('budget/cells');};"
+             ;; A constructor pays one unit of FUEL, always, then one cell when
+             ;; cells are metered -- the order kotoba.kir charges them in (amu
+             ;; ADR 0353 point 7, floor :allocation-budget-targets), so a loop
+             ;; cannot build past the budget its caller granted.
+             "const cell=()=>{charge();if(cells!==null&&--cells<0)throw new Error('budget/cells');};"
              "const chargeBytes=v=>{if(bytes!==null){bytes-=utf8Bytes(v);if(bytes<0)throw new Error('budget/bytes');}return v;};"
              "const enter=()=>{if(++frames>framesLimit){frames--;throw new Error('budget/frames');}};"
              "const quot=(a,b)=>{if(b===0n)throw new Error('division-by-zero');"
