@@ -2050,13 +2050,16 @@
 ;; cell each) and the heads that produce a string (charged its UTF-8 bytes) --
 ;; the same two sets osaho's `kotoba.kir` charges, so the reference and this
 ;; profile stop at the same point.
+;; Two sets, because a quoted symbol set holds at most 32 entries on the Kotoba
+;; route (a typed-set bound; a larger literal is reported as "mixes symbols").
 (def ^:private cell-constructor-ops
   '#{pair kgraph-assert! map-new map-assoc option-some result-ok result-err
      result-ok-of result-err-of variant-new option-some-of option-none-of
      hetero-vector-new hetero-vector-assoc typed-list-new typed-set-new
      typed-set-conj typed-set-disj typed-map-new typed-map-assoc typed-map-dissoc
-     record-new record-assoc vector-new vector-conj vector-assoc vector-assoc!
-     vector-alloc vector-drop vector-take vector-f64-new vector-f64-conj
+     record-new record-assoc vector-new vector-conj vector-assoc vector-assoc!})
+(def ^:private cell-constructor-ops-more
+  '#{vector-alloc vector-drop vector-take vector-f64-new vector-f64-conj
      vector-f64-assoc vector-f64-drop vector-f64-take string-index-new
      string-index-assoc disjoint-set-i64-new disjoint-set-i64-union
      document-vector document-list document-set document-map
@@ -2114,7 +2117,7 @@
            (cond
              ;; charged where the reference interpreter charges: before the
              ;; operands, once per constructing head.
-             (contains? cell-constructor-ops op) (str "(cell()," js ")")
+             (or (contains? cell-constructor-ops op) (contains? cell-constructor-ops-more op)) (str "(cell()," js ")")
              (contains? byte-producing-ops op) (str "chargeBytes(" js ")")
              :else js))))
      :else (fail! "unsupported KIR node" {:node form}))))
