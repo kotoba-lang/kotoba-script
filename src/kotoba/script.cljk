@@ -1339,6 +1339,16 @@
           (require-type! (infer-type value env signatures) type value)
           (require-type! (infer-type index env signatures) :i64 index)
           (second type))
+        ;; The list builder (amu ADR 0353 floor :empty-vector-field): conj at
+        ;; the end, answering the list type.
+        typed-list-conj
+        (let [[type value item] args]
+          (require-arity! op args 3) (validate-value-type! type)
+          (when-not (canonical-list-type? type)
+            (fail! "typed list conj requires [:list item-type]" {:type type}))
+          (require-type! (infer-type value env signatures) type value)
+          (require-type! (infer-type item env signatures) (second type) item)
+          type)
         hetero-vector-new
         (let [[type & items] args
               item-types (when (heterogeneous-vector-type? type) (second type))]
@@ -1685,6 +1695,15 @@
       (= op 'typed-list-nth)
       (str "typedListNth(" (type-js (first args)) "," (a (second args)) ","
            (a (nth args 2)) ")")
+      ;; The list builder: the reference's `typed-list-conj`, bounded by the
+      ;; same canonical list item limit and trapping past it. Inline rather
+      ;; than a prelude helper, so a program that builds no list keeps the
+      ;; bytes it had.
+      (= op 'typed-list-conj)
+      (str "((t,v,item)=>{v=assertTypedList(t,v);item=shallowTyped(t[1],item);"
+           "if(v[1].length>=" max-canonical-list-items ")throw new Error('list-too-large');"
+           "return makeTypedList(t,[...v[1],item]);})("
+           (type-js (first args)) "," (a (second args)) "," (a (nth args 2)) ")")
       (= op 'bytes-empty) "emptyBytes"
       (= op 'bytes-count) (str "bytesCount(" (a (first args)) ")")
       (= op 'bytes-at) (str "bytesAt(" (a (first args)) "," (a (second args)) ")")
@@ -2053,7 +2072,7 @@
 (def ^:private cell-constructor-ops
   '#{pair kgraph-assert! map-new map-assoc option-some result-ok result-err
      result-ok-of result-err-of variant-new option-some-of option-none-of
-     hetero-vector-new hetero-vector-assoc typed-list-new typed-set-new
+     hetero-vector-new hetero-vector-assoc typed-list-new typed-list-conj typed-set-new
      typed-set-conj typed-set-disj typed-map-new typed-map-assoc typed-map-dissoc
      record-new record-assoc vector-new vector-conj vector-assoc vector-assoc!
      vector-alloc vector-drop vector-take vector-f64-new vector-f64-conj
