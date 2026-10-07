@@ -611,6 +611,12 @@
           ;; `:bool` would make `(and (= a b) (< c d))` untypeable.
           :bool)
 
+      (contains? '#{js-nullish? js-truthy? js-strict-equal?} op)
+      (do (require-arity! op args (if (= op 'js-strict-equal?) 2 1))
+          (doseq [[arg type] (map vector args types)]
+            (require-type! type :js-value arg))
+          :bool)
+
       (= op 'bool-not)
       (do (require-arity! op args 1)
           (require-type! (first types) :bool (first args))
@@ -1640,6 +1646,11 @@
       ;; Profile 5: `:bool` is a JS boolean in this target (see `=` above).
       (let [js-op (case op < "<" > ">" <= "<=" >= ">=")]
         (str "(" (str/join (str " " js-op " ") (map a args)) ")"))
+      (= op 'js-nullish?)
+      (str "(v=>v===null||v===undefined)(" (a (first args)) ")")
+      (= op 'js-truthy?) (str "(!!(" (a (first args)) "))")
+      (= op 'js-strict-equal?)
+      (str "(" (a (first args)) "===" (a (second args)) ")")
       (= op 'bool-not) (str "(!" (a (first args)) ")")
       (= op 'option-some) (str "optionSome(" (a (first args)) ")")
       (= op 'option-none) "optionNone"
