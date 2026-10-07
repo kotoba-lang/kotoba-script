@@ -142,10 +142,10 @@
      (let [[_ type-id fields] type]
        (when-not (and (keyword? type-id) (namespace type-id))
          (fail! "record type id must be a qualified keyword" {:type type}))
-       (when-not (and (vector? fields) (seq fields) (<= (count fields) max-record-fields)
+       (when-not (and (vector? fields) (<= (count fields) max-record-fields)
                       (every? #(and (vector? %) (= 2 (count %)) (keyword? (first %))) fields)
                       (= (count fields) (count (distinct (map first fields)))))
-         (fail! "record fields must be a non-empty unique bounded vector" {:type type}))
+         (fail! "record fields must be a unique bounded vector" {:type type}))
        (vswap! nodes + (+ 2 (* 2 (count fields))))
        (when (> @nodes max-type-nodes)
          (fail! "KIR value type exceeds node limit" {:limit max-type-nodes}))
@@ -2421,6 +2421,11 @@
             (fail! "KIR function names are not unique" {:functions function-names}))
         signatures (validate-types! kir)
         opaque-js? (boolean (some #{:js-value} (tree-seq coll? seq kir)))
+        empty-records? (boolean
+                        (some #(and (vector? %) (= 3 (count %))
+                                    (= :record (first %))
+                                    (vector? (nth % 2)) (empty? (nth % 2)))
+                              (tree-seq coll? seq kir)))
         exports (vec (or (:exports kir) function-names))
         _ (when-not (and (= (count exports) (count (distinct exports)))
                          ;; Only a deliberate entryless empty vector is a
@@ -2733,7 +2738,8 @@
              "for(let i=1;i<entries.length;i++)if(compareTyped(t[1],entries[i-1][0],entries[i][0])===0)"
              "throw new Error('duplicate-map-key');return Object.freeze([t,Object.freeze(entries)]);}];}"
              "if(Array.isArray(t)&&t.length===3&&t[0]==='record'){"
-             "if(!Array.isArray(t[2])||t[2].length<1||t[2].length>" max-record-fields
+             "if(!Array.isArray(t[2])||" (when-not empty-records? "t[2].length<1||")
+             "t[2].length>" max-record-fields
              "||!Array.isArray(v)||v.length!==t[2].length+1||!sameType(v[0],t))"
              "throw new Error('invalid-record');"
              "return [null,t[2].map((f,i)=>[f[1],v[i+1]]),items=>Object.freeze([t,...items])];}"
