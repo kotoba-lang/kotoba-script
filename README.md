@@ -265,3 +265,9 @@ truthiness before exposing a typed bool. This preserves negation when a host
 replaces that function and returns a non-bool falsy value. The lookup and call
 remain dynamic, the operand is evaluated once, errors propagate unchanged, and
 return objects are not inspected or coerced through user hooks.
+
+The zero-arity `(js-undefined)` operation returns an opaque JS undefined via
+`void 0`. It needs no host lookup, source evaluation or opaque literal. Its
+result is `:js-value`, with invalid arity or result types refused. This prepares
+CosmoKit noop; complete source frontend, module linking and public function
+reflection/constructibility parity still require separate qualification.

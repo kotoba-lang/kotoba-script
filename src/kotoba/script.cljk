@@ -617,6 +617,9 @@
             (require-type! type :js-value arg))
           (if (= op 'js-typeof) :string :bool))
 
+      (= op 'js-undefined)
+      (do (require-arity! op args 0) :js-value)
+
       (= op 'js-bool-value)
       (do (require-arity! op args 1)
           (require-type! (first types) :bool (first args))
@@ -1659,6 +1662,7 @@
       (= op 'js-typeof) (str "(typeof " (a (first args)) ")")
       (= op 'js-array?) (str "(!!Array.isArray(" (a (first args)) "))")
       (= op 'js-bool-value) (str "assertBool(" (a (first args)) ")")
+      (= op 'js-undefined) "(void 0)"
       (= op 'bool-not) (str "(!" (a (first args)) ")")
       (= op 'option-some) (str "optionSome(" (a (first args)) ")")
       (= op 'option-none) "optionNone"
