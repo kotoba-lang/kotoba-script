@@ -271,3 +271,35 @@ The zero-arity `(js-undefined)` operation returns an opaque JS undefined via
 result is `:js-value`, with invalid arity or result types refused. This prepares
 CosmoKit noop; complete source frontend, module linking and public function
 reflection/constructibility parity still require separate qualification.
+
+
+### Opaque JS capture cells (bootstrap prerequisite)
+
+The checked KIR operations `js-capture-new` and `js-capture-value` retain an
+opaque JS payload in a private typed cell. Integer IDs and chain tails retain
+the existing closure ABI; ordinary `pair-first` refuses a typed opaque slot.
+Only modules using these operations receive the private identity helpers and a
+4096-cell shared pair arena. Ordinary and opaque pair allocations both count
+there and debit the existing constructor fuel/cells ledger. The five-capture
+closure limit and default execution budgets remain unchanged. Modules without
+capture operations keep their prior emitted bytes.
+
+Qualification on 2026-10-08: all ten maintained Node test scripts, executed
+with a closed authored classpath and the pinned bootstrap engine, passed 23 tests
+/ 165 assertions plus 109 parity checks; all 66 unchanged goldens (4,223,966
+bytes) match. Forbidden JVM launchers remained unused. The outer peer-verifying
+wrapper was not executed in this local environment; its new capture script is
+registered for maintained acceptance.
+
+An actual candidate artifact executed in pinned offline Node v24.21.0: 14
+opaque values / 28 identity comparisons with zero property reads, seven trap,
+budget and capture-limit checks, and 2000 calls. New maintained tests also
+exercise shared ordinary/opaque arena exhaustion and private method identity
+following ambient WeakSet method replacement.
+
+This is an interpreter/emitter prerequisite paired with published Osaho PR103
+(`d1c27ed446745f9db7d4b20c6531e108e6949a9c`). Checked Sema capture lifting,
+normal Amu publication, persistent escaping closure and host callback adaptation,
+browser-host execution and native selfhost remain separate work. The default
+restricted subset verifier was retained. Operator-authored; public System One
+status remained HTTP503, so no model performance result is claimed.
