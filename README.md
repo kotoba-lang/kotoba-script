@@ -232,6 +232,12 @@ Canonical ordering and explicitly opaque ordered set items/map keys refuse.
 Existing scalar typing and capabilities remain checked. The new prelude guards
 are emitted only when the KIR names the opaque type; existing golden modules
 retain their bytes.
+The checked JS-only operations `js-nullish?`, `js-truthy?`, and
+`js-strict-equal?` consume explicitly opaque operands and return `:bool`.
+They emit strict null/undefined tests, JavaScript ToBoolean, and strict
+identity equality. Each operand is evaluated once, without property reads
+or conversion. Other operand types and incorrect arities are refused.
+This backend addition still requires explicit source-frontend admission.
 
 The small descriptor helper was proposed by public System One Coding as an
 iterative refactor. Its initial full replacement had one extra closing
