@@ -620,6 +620,15 @@
       (= op 'js-undefined)
       (do (require-arity! op args 0) :js-value)
 
+      (= op 'js-capture-new)
+      (do (require-arity! op args 2)
+          (require-type! (first types) :js-value (first args))
+          (require-type! (second types) :i64 (second args)) :i64)
+
+      (= op 'js-capture-value)
+      (do (require-arity! op args 1)
+          (require-type! (first types) :i64 (first args)) :js-value)
+
       (= op 'js-bool-value)
       (do (require-arity! op args 1)
           (require-type! (first types) :bool (first args))
@@ -1893,9 +1902,17 @@
       (= op 'document-bool-value) (str "docScalarOption('bool'," (a (first args)) ")")
       (= op 'document-i64-value) (str "docScalarOption('i64'," (a (first args)) ")")
       (= op 'document-f64-value) (str "docScalarOption('f64'," (a (first args)) ")")
-      (= op 'pair) (str "Object.freeze([" (a (first args)) "," (a (second args)) "])")
-      (= op 'pair-first) (str (a (first args)) "[0]")
+      (= op 'pair)
+      (if (:js-capture-cells? (meta functions))
+        (str "capturePair(" (a (first args)) "," (a (second args)) ")")
+        (str "Object.freeze([" (a (first args)) "," (a (second args)) "])"))
+      (= op 'pair-first)
+      (if (:js-capture-cells? (meta functions))
+        (str "capturePairFirst(" (a (first args)) ")")
+        (str (a (first args)) "[0]"))
       (= op 'pair-second) (str (a (first args)) "[1]")
+      (= op 'js-capture-new) (str "jsCaptureNew(" (a (first args)) "," (a (second args)) ")")
+      (= op 'js-capture-value) (str "jsCaptureValue(" (a (first args)) ")")
       (= op 'cap-call) (str "callCapability(" (first args) "," (a (second args)) ")")
       (= op 'typed-cap-call)
       (if (and (= (nth args 1) :i64) (= (nth args 2) :i64))
@@ -2100,7 +2117,7 @@
 ;; the same two sets osaho's `kotoba.kir` charges, so the reference and this
 ;; profile stop at the same point.
 (def ^:private cell-constructor-ops
-  '#{pair kgraph-assert! map-new map-assoc option-some result-ok result-err
+  '#{pair js-capture-new kgraph-assert! map-new map-assoc option-some result-ok result-err
      result-ok-of result-err-of variant-new option-some-of option-none-of
      hetero-vector-new hetero-vector-assoc typed-list-new typed-list-conj typed-set-new
      typed-set-conj typed-set-disj typed-map-new typed-map-assoc typed-map-dissoc
@@ -2394,7 +2411,12 @@
   (when-not (contains? supported-kir-formats (:format kir))
     (fail! "unsupported or unchecked KIR format" {:format (:format kir)}))
   (let [function-names (mapv :name (:functions kir))
-        functions (set function-names)
+        capture-cells? (boolean
+                       (some (fn [form]
+                               (and (seq? form)
+                                    (contains? '#{js-capture-new js-capture-value} (first form))))
+                             (mapcat #(tree-seq coll? seq (:body %)) (:functions kir))))
+        functions (with-meta (set function-names) {:js-capture-cells? capture-cells?})
         _ (when-not (= (count function-names) (count functions))
             (fail! "KIR function names are not unique" {:functions function-names}))
         signatures (validate-types! kir)
@@ -2512,6 +2534,17 @@
              "throw new Error('capability-grant-mismatch');"
              "const i64=n=>BigInt.asIntN(64,n);"
              "const assertI64=v=>{if(typeof v!=='bigint'||i64(v)!==v)throw new Error('invalid-i64');return v;};"
+             (when capture-cells?
+               ;; Only capture-bearing modules use the typed arena helpers;
+               ;; ordinary integer emission and existing goldens stay exact.
+               ;; Weak membership observes no properties of opaque payloads.
+               (str "const captureCells=new WeakSet(),captureAdd=captureCells.add.bind(captureCells),captureHas=captureCells.has.bind(captureCells),captureFreeze=Object.freeze;"
+                    "let captureArenaCells=0;"
+                    "const capturePair=(a,b)=>{if(++captureArenaCells>4096)throw new Error('budget/cells');return captureFreeze([a,b]);};"
+                    "const isCapture=v=>captureHas(v);"
+                    "const jsCaptureNew=(v,t)=>{if(typeof t==='bigint')assertI64(t);else if(!Array.isArray(t)||t.length!==2)throw new Error('invalid-i64');const c=capturePair(v,t);captureAdd(c);return c;};"
+                    "const jsCaptureValue=c=>{if(!isCapture(c))throw new Error('invalid-js-capture-cell');return c[0];};"
+                    "const capturePairFirst=c=>{if(isCapture(c))throw new Error('js-capture-projection');return c[0];};"))
              "const assertClosure=v=>{if(!Array.isArray(v)||v.length!==2)throw new Error('invalid-closure');assertI64(v[0]);let c=v[1],n=0;while(c!==0n){if(!Array.isArray(c)||c.length!==2||++n>5)throw new Error('invalid-closure-capture-chain');c=c[1];}return v;};"
              "const assertI64PairChain=v=>{let c=v,n=0;while(c!==0n){if(!Array.isArray(c)||c.length!==2)throw new Error('invalid-i64-pair-chain');if(++n>4)throw new Error('i64-pair-chain-limit');assertI64(c[0]);c=c[1];}return v;};"
              "const i32Wrap=v=>BigInt.asIntN(32,assertI64(v));"
