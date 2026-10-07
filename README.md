@@ -220,3 +220,25 @@ The acceptance engine is the exact `.cljk`-aware nbb Git pin in package-lock;
 the checked peer source paths are passed in a dependency-free config. This
 prevents nbb dependency resolution from launching bb/tools.deps/Java during
 the JVM-free route. These Node runs remain bootstrap evidence, not selfhost.
+
+## Opaque JS interoperability leaf
+
+Checked KIR may declare `:js-value` arguments and results on this JS target.
+Exports and internal calls preserve raw values exactly, including undefined,
+NaN, signed zero, functions, symbols, cycles and proxies. Boundary checks treat
+these as opaque leaves: no property access, coercion or copying. This does not
+bound retained host graphs or grant callback/property/ambient operations.
+Canonical ordering and explicitly opaque ordered set items/map keys refuse.
+Existing scalar typing and capabilities remain checked. The new prelude guards
+are emitted only when the KIR names the opaque type; existing golden modules
+retain their bytes.
+
+The small descriptor helper was proposed by public System One Coding as an
+iterative refactor. Its initial full replacement had one extra closing
+parenthesis; one budgeted repair returned unchanged source and was refused.
+An operator removed that parenthesis, after which the original immutable
+52 assertions passed on both baseline and candidate in a pinned offline image.
+This is not model-only success. The emitter's separate raw-JS test executes an
+actual generated library with 24 host values, including a revoked proxy.
+Source syntax, Amu dependency pins/target guards and Mithril frontend linking
+remain separate prerequisites; these tests are Node/nbb bootstrap evidence.

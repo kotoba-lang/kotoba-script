@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const peers = JSON.parse(readFileSync(join(root, 'scripts/jvm-free-peers.json'), 'utf8'));
 const peersRoot = process.env.KOTOBA_TEST_PEERS_ROOT || resolve(root, '..');
-const paths = [join(root, 'src')];
+const paths = [join(root, 'src'), join(root, 'test')];
 for (const [name, expected] of Object.entries(peers)) {
   const path = join(peersRoot, name);
   const result = spawnSync('git', ['-C', path, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
@@ -29,7 +29,7 @@ try {
   for (const name of ['java', 'javac', 'clojure', 'clj']) {
     writeFileSync(join(temp, name), '#!/bin/sh\n: > "$KOTOBA_JVM_MARKER"\nexit 97\n', { mode: 0o755 });
   }
-  for (const test of ['test/nbb/fuel.cljk', 'test/nbb/differential.cljk', 'test/nbb/empty_library.cljk']) {
+  for (const test of ['test/nbb/fuel.cljk', 'test/nbb/differential.cljk', 'test/nbb/empty_library.cljk', 'test/nbb/js_value.cljk', 'test/nbb/js_descriptor.cljk', 'test/nbb/parity.cljk']) {
     const result = spawnSync(process.execPath,
       [join(root, 'node_modules/nbb/cli.js'), '--config', config, test],
       { cwd: root, stdio: 'inherit', timeout: 120000,
@@ -38,7 +38,7 @@ try {
     if (existsSync(marker)) throw new Error(`JVM executable invoked by ${test}`);
     if (result.error || result.status !== 0) throw new Error(`${test} failed: ${result.error || result.status}`);
   }
-  console.log('JVM-free acceptance: 51 assertions; no JVM fallback observed.');
+  console.log('JVM-free acceptance: 112 assertions and 109 parity checks; no JVM fallback observed.');
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
