@@ -237,6 +237,17 @@ The checked JS-only operations `js-nullish?`, `js-truthy?`, and
 They emit strict null/undefined tests, JavaScript ToBoolean, and strict
 identity equality. Each operand is evaluated once, without property reads
 or conversion. Other operand types and incorrect arities are refused.
+The unary operations `js-typeof` (`:js-value` to `:string`), `js-array?`
+(`:js-value` to `:bool`) and `js-bool-value` (`:bool` to `:js-value`) retain
+these exact types. They emit native typeof, Array.isArray and checked boolean
+injection, respectively, and evaluate their operand once. Array branding
+recognizes foreign-realm arrays and preserves revoked-Proxy TypeError.
+A composed opaque conditional can preserve falsy raw values and return an
+injected bool otherwise, as required by the CosmoKit isPlainObject expression.
+Finite emitted-code tests cover 26 host values, three explicit capability
+callbacks evaluated once in order, and untouched getter/Proxy traps. The
+unchanged 66-module / 109-check parity fixture remains a bootstrap comparison;
+this is not complete package or compiler-selfhost qualification.
 This backend addition still requires explicit source-frontend admission.
 
 The small descriptor helper was proposed by public System One Coding as an
