@@ -18,6 +18,7 @@
     weaker instrument than the AST walk and says so in its failure data."
   {:kotoba/export [artifact-schema default-frames default-fuel emit emit-expr floating-point-policy supported-kir-formats verify-output!]}
   (:require [kotoba.lang.text :as str]
+            [kotoba.script.js-value :as js-value]
             #?@(:cljs [["node:child_process" :as child-process]
                        ["node:fs" :as node-fs]
                        ["node:os" :as node-os]
@@ -30,7 +31,7 @@
 (def floating-point-policy "ieee-754-f32-f64-v7")
 (def supported-kir-formats #{:kotoba.kir/v3 :kotoba.kir/v4})
 (def ^:private value-types #{:i64 :f32 :f64 :string :keyword :symbol :map :bool :bytes :option-i64 :result-i64
-                             :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document})
+                             :vector-i64 :vector-f64 :string-index :disjoint-set-i64 :document :js-value})
 ;; Every number below is kotoba-lang `lang/limits.edn` (adr-2609242100 P1),
 ;; restated because the emitted prelude carries them as literals and an
 ;; emitted module has no classpath. amu `value_bounds_agreement_test` compares
@@ -126,12 +127,16 @@
      (do (when (contains? #{:f32 :f64} (second type))
            (fail! "direct floating set items are outside the structured scalar ABI" {:type type}))
          (validate-value-type! (second type) (inc depth) nodes)
+         (when (js-value/contains-type? (second type))
+           (fail! "opaque JS values cannot be ordered set items" {:type type}))
          type)
      (and (vector? type) (= 3 (count type)) (= :map (first type)))
      (do (when (some #{:f32 :f64} [(second type) (nth type 2)])
            (fail! "direct floating map keys or values are outside the structured scalar ABI" {:type type}))
          (validate-value-type! (second type) (inc depth) nodes)
          (validate-value-type! (nth type 2) (inc depth) nodes)
+         (when (js-value/contains-type? (second type))
+           (fail! "opaque JS values cannot be ordered map keys" {:type type}))
          type)
      (and (vector? type) (= 3 (count type)) (= :record (first type)))
      (let [[_ type-id fields] type]
@@ -348,7 +353,8 @@
 (defn- adt-guard-type?
   "A type whose value is a tree (and so whose full check is a walk)."
   [type]
-  (or (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
+  (or (= :js-value type)
+      (parametric-result-type? type) (variant-type? type) (generic-option-type? type)
       (canonical-list-type? type) (heterogeneous-vector-type? type) (typed-set-type? type)
       (canonical-typed-map-type? type) (record-type? type)
       (schema-ref-type? type)))
@@ -397,6 +403,7 @@
     ;; exported helper every argument on every internal call): O(n^2).
     (str "assertOperand(" (type-js type) "," expression ")")
     (str (case type
+           :js-value "assertJsValue("
            :f32 "assertF32("
            :f64 "assertF64("
            :string (if internal? "checkString(" "assertString(")
@@ -2368,6 +2375,7 @@
         _ (when-not (= (count function-names) (count functions))
             (fail! "KIR function names are not unique" {:functions function-names}))
         signatures (validate-types! kir)
+        opaque-js? (boolean (some #{:js-value} (tree-seq coll? seq kir)))
         exports (vec (or (:exports kir) function-names))
         _ (when-not (and (= (count exports) (count (distinct exports)))
                          ;; Only a deliberate entryless empty vector is a
@@ -2629,7 +2637,10 @@
              ;; `[null, children, build]`.
              "const chargeBoundary=(s,n)=>{if(s===null)return;s.bytes+=n;if(s.bytes>" boundary-traversal-bytes
              ")throw new Error('budget/boundary-bytes');};"
-             "const typedNode=(t,v,s)=>{if(t==='i64')return [assertI64(v)];if(t==='f32')return [assertF32(v)];if(t==='f64')return [assertF64(v)];"
+             (when opaque-js? "const assertJsValue=v=>v;")
+             "const typedNode=(t,v,s)=>{"
+             (when opaque-js? "if(t==='js-value')return [v];")
+             "if(t==='i64')return [assertI64(v)];if(t==='f32')return [assertF32(v)];if(t==='f64')return [assertF64(v)];"
              "if(t==='string'){v=assertString(v);chargeBoundary(s,utf8Bytes(v));return [v];}"
              "if(t==='keyword'){v=assertKeyword(v);chargeBoundary(s,utf8Bytes(v));return [v];}"
              "if(t==='map')return [assertMap(v)];if(t==='bool')return [assertBool(v)];"
@@ -2695,7 +2706,9 @@
              "if(i<top[0].length){const n=visit(top[0][i][0],top[0][i][1]);if(n.length===1)top[2].push(n[0]);else stack.push([n[1],n[2],[]]);}"
              "else{const built=top[1](top[2]);stack.pop();if(stack.length===0)return built;stack[stack.length-1][2].push(built);}}};"
              ;; O(1): the value carries the tag its type declares. Never walks.
-             "const operandTag=(t,v)=>{if(t==='i64')return typeof v==='bigint';if(t==='f32'||t==='f64')return typeof v==='number';"
+             "const operandTag=(t,v)=>{"
+             (when opaque-js? "if(t==='js-value')return true;")
+             "if(t==='i64')return typeof v==='bigint';if(t==='f32'||t==='f64')return typeof v==='number';"
              "if(t==='string')return typeof v==='string';if(t==='keyword')return typeof v==='string'&&v[0]===':';"
              "if(t==='bool')return typeof v==='boolean';if(t==='bytes')return v instanceof Uint8Array;"
              "if(t==='vector-i64'||t==='vector-f64')return Array.isArray(v)||linearValues.has(v);"
@@ -2743,7 +2756,9 @@
              "return BigInt(assertTypedList(v[0],v)[1].length);return BigInt(assertVectorI64(v).length);};"
              "const cmp=(a,b)=>a<b?-1:a>b?1:0;"
              "const compareList=(types,a,b)=>{for(let i=0;i<types.length;i++){const c=compareTyped(types[i],a[i],b[i]);if(c)return c;}return 0;};"
-             "const compareTyped=(t,a,b)=>{if(t==='i64'||t==='string'||t==='keyword')return cmp(a,b);"
+             "const compareTyped=(t,a,b)=>{"
+             (when opaque-js? "if(t==='js-value')throw new Error('unordered-js-value');")
+             "if(t==='i64'||t==='string'||t==='keyword')return cmp(a,b);"
              "if(t==='bool')return a===b?0:(a?1:-1);"
              "if(t==='option-i64'){if(a[0]!==b[0])return a[0]?1:-1;return a[0]?cmp(a[1],b[1]):0;}"
              "if(t==='result-i64'){if(a[0]!==b[0])return a[0]?1:-1;return cmp(a[1],b[1]);}"
