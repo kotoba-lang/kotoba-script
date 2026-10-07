@@ -303,3 +303,12 @@ normal Amu publication, persistent escaping closure and host callback adaptation
 browser-host execution and native selfhost remain separate work. The default
 restricted subset verifier was retained. Operator-authored; public System One
 status remained HTTP503, so no model performance result is claimed.
+
+### Empty nominal records
+
+Empty record descriptors now follow the published Sema options-map floor. Nominal
+IDs, field shape and resource bounds remain checked. Modules without an empty
+record descriptor retain their previous emitted bytes. Local bootstrap acceptance
+passed 26 tests / 172 assertions plus 109 parity checks and 66 unchanged goldens.
+See [qualification](docs/qualification/empty-records/README.md) for the closed
+classpath, disabled Actions and normal Amu consumer limitations.
