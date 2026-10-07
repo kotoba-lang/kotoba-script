@@ -20,20 +20,25 @@ for (const [name, expected] of Object.entries(peers)) {
 const temp = mkdtempSync(join(tmpdir(), 'kotoba-jvm-free-'));
 const marker = join(temp, 'jvm-invoked');
 try {
+  // nbb's default :deps resolution may launch bb/tools.deps and then Java.
+  // These exact peers are already present and checked; read only this closed
+  // classpath, with no dependency resolver/fallback on the acceptance route.
+  const config = join(temp, 'offline.edn');
+  writeFileSync(config, '{:paths [' + paths.map(p => JSON.stringify(p)).join(' ') + ']}\n');
   // Detect attempted JVM fallback even if a caller catches its failure.
   for (const name of ['java', 'javac', 'clojure', 'clj']) {
     writeFileSync(join(temp, name), '#!/bin/sh\n: > "$KOTOBA_JVM_MARKER"\nexit 97\n', { mode: 0o755 });
   }
-  for (const test of ['test/nbb/fuel.cljk', 'test/nbb/differential.cljk']) {
+  for (const test of ['test/nbb/fuel.cljk', 'test/nbb/differential.cljk', 'test/nbb/empty_library.cljk']) {
     const result = spawnSync(process.execPath,
-      [join(root, 'node_modules/nbb/cli.js'), '--classpath', paths.join(':'), test],
+      [join(root, 'node_modules/nbb/cli.js'), '--config', config, test],
       { cwd: root, stdio: 'inherit', timeout: 120000,
         env: { ...process.env, TMPDIR: temp, KOTOBA_JVM_MARKER: marker,
           PATH: `${temp}:${process.env.PATH || ''}` } });
     if (existsSync(marker)) throw new Error(`JVM executable invoked by ${test}`);
     if (result.error || result.status !== 0) throw new Error(`${test} failed: ${result.error || result.status}`);
   }
-  console.log('JVM-free acceptance: 44 assertions; no JVM fallback observed.');
+  console.log('JVM-free acceptance: 51 assertions; no JVM fallback observed.');
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

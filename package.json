@@ -2,7 +2,7 @@
   "name": "kotoba-script-tooling",
   "private": true,
   "devDependencies": {
-    "nbb": "1.5.212"
+    "nbb": "git+https://github.com/kotoba-lang/org-babashka-nbb.git#829f0ba11016e925001d80e51f12848c4ad58112"
   },
   "scripts": {
     "test-nbb": "kbb --backend sci --classpath src test/nbb/parity.cljk",
