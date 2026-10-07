@@ -1657,7 +1657,7 @@
       (= op 'js-strict-equal?)
       (str "(" (a (first args)) "===" (a (second args)) ")")
       (= op 'js-typeof) (str "(typeof " (a (first args)) ")")
-      (= op 'js-array?) (str "Array.isArray(" (a (first args)) ")")
+      (= op 'js-array?) (str "(!!Array.isArray(" (a (first args)) "))")
       (= op 'js-bool-value) (str "assertBool(" (a (first args)) ")")
       (= op 'bool-not) (str "(!" (a (first args)) ")")
       (= op 'option-some) (str "optionSome(" (a (first args)) ")")

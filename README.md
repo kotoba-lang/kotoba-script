@@ -259,3 +259,9 @@ This is not model-only success. The emitter's separate raw-JS test executes an
 actual generated library with 24 host values, including a revoked proxy.
 Source syntax, Amu dependency pins/target guards and Mithril frontend linking
 remain separate prerequisites; these tests are Node/nbb bootstrap evidence.
+
+Array branding normalizes the observed `Array.isArray` result with JavaScript
+truthiness before exposing a typed bool. This preserves negation when a host
+replaces that function and returns a non-bool falsy value. The lookup and call
+remain dynamic, the operand is evaluated once, errors propagate unchanged, and
+return objects are not inspected or coerced through user hooks.

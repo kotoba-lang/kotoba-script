@@ -38,7 +38,7 @@ try {
     if (existsSync(marker)) throw new Error(`JVM executable invoked by ${test}`);
     if (result.error || result.status !== 0) throw new Error(`${test} failed: ${result.error || result.status}`);
   }
-  console.log('JVM-free acceptance: 141 assertions and 109 parity checks; no JVM fallback observed.');
+  console.log('JVM-free acceptance: 143 assertions and 109 parity checks; no JVM fallback observed.');
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
