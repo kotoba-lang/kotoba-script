@@ -796,7 +796,7 @@
     (is (zero? (:exit result)) (:err result))
     (is (re-find #"entry:null" source)))
   (is (thrown-with-msg? kerror/ExceptionInfo #"exports are invalid"
-                        (script/emit {:format :kotoba.kir/v3 :entry nil :exports []
+                        (script/emit {:format :kotoba.kir/v3 :entry nil
                                       :effects #{} :functions []}))))
 
 (def bounded-strings-kir

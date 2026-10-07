@@ -2370,7 +2370,13 @@
         signatures (validate-types! kir)
         exports (vec (or (:exports kir) function-names))
         _ (when-not (and (= (count exports) (count (distinct exports)))
-                         (seq exports)
+                         ;; Only a deliberate entryless empty vector is a
+                         ;; zero-export library; keep implicit empty programs
+                         ;; and empty exports on an executable entry refused.
+                         (or (seq exports)
+                             (and (= [] (:exports kir))
+                                  (nil? (:entry kir))
+                                  (vector? (:functions kir))))
                          (every? functions exports))
             (fail! "KIR exports are invalid" {:exports exports}))
         entry (:entry kir)

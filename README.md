@@ -208,7 +208,15 @@ known synthesized-loop fuel discrepancy.
 
 The new acceptance path is JVM-independent: `npm run test-jvm-free`. It checks
 the peer SHAs in `scripts/jvm-free-peers.json` (sibling checkouts by default;
-override with `KOTOBA_TEST_PEERS_ROOT`), runs all 44 focused assertions, and
+override with `KOTOBA_TEST_PEERS_ROOT`), runs all 51 focused assertions, and
 fails if a test attempts a JVM launcher. CI fetches those exact peers without
 installing Java or Clojure. Existing JVM tests remain compatibility diagnostics;
 regenerating JVM goldens is not a prerequisite for new backend work.
+
+Explicit entryless empty export vectors instantiate with no public functions,
+including private-only libraries. Missing/implicit empty exports, dangling or
+duplicate exports and executable entries with empty exports remain refused.
+The acceptance engine is the exact `.cljk`-aware nbb Git pin in package-lock;
+the checked peer source paths are passed in a dependency-free config. This
+prevents nbb dependency resolution from launching bb/tools.deps/Java during
+the JVM-free route. These Node runs remain bootstrap evidence, not selfhost.
