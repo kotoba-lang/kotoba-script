@@ -2066,6 +2066,50 @@
 (defn- self-tail-call? [form fname arity]
   (and (seq? form) (= (first form) fname) (= (count (rest form)) arity)))
 
+;; A KIR pair is an i64 word on the interpreter, wasm32 and native, and a
+;; frozen two-element Array here. An internal function's :i64 parameter that
+;; its body reads with `pair-first` / `pair-second` therefore receives an
+;; Array, and `assertI64` on it traps `invalid-i64` on this target alone. The
+;; frontend lifts doseq's pair walk into exactly such a loop (kotoba-sema
+;; 64f58ab, `__kotoba_loop_N [cursor index]`), and kotoba-lang's
+;; lang/conformance/control/doseq.kotoba trapped there -- measured
+;; 2026-10-10 through `amu test --manifest`; the KIR interpreter and wasm32
+;; answered 7. Such a parameter is guarded `assertPairWord`: a pair cell, or
+;; an i64 (the 0 that ends a chain). Only a parameter the frontend named
+;; (`__kotoba_`, a prefix refused in source -- the rule `closure-dispatcher?`
+;; uses) qualifies: the lifted loop is exported whenever its module names no
+;; exports, so being internal is not the test. Only the cell's shape is
+;; checked; what its fields hold is checked where they are used.
+(defn- pair-word-param-indexes
+  "Indexes of PARAMS, frontend-named, that BODY passes, unshadowed, to
+  `pair-first` or `pair-second`."
+  [params body]
+  (let [read (volatile! #{})]
+    (letfn [(walk [form shadowed]
+              (when (seq? form)
+                (let [[op & args] form]
+                  (cond
+                    (= op 'let)
+                    (let [[bindings body] args]
+                      (loop [pairs (partition 2 bindings) shadowed shadowed]
+                        (if-let [[name value] (first pairs)]
+                          (do (walk value shadowed)
+                              (recur (next pairs) (conj shadowed name)))
+                          (walk body shadowed))))
+
+                    (and (contains? '#{pair-first pair-second} op)
+                         (symbol? (first args))
+                         (not (contains? shadowed (first args))))
+                    (vswap! read conj (first args))
+
+                    :else (doseq [arg args] (walk arg shadowed))))))]
+      (walk body #{}))
+    (set (keep-indexed (fn [index param]
+                         (when (and (contains? @read param)
+                                    (str/starts-with? (str param) "__kotoba_"))
+                           index))
+                       params))))
+
 (defn- reaches-self-tail-call?
   "Does FORM reach a self call in tail position? `let` passes the tail on to
   its body, `if` to both branches, `do` to its last form; nothing else does."
@@ -2441,6 +2485,20 @@
                                     (vector? (nth % 2)) (empty? (nth % 2)))
                               (tree-seq coll? seq kir)))
         exports (vec (or (:exports kir) function-names))
+        pair-word-params
+        (into {}
+              (keep (fn [{:keys [name params body]}]
+                      (let [{:keys [param-types closure-param-indexes
+                                    i64-pair-chain-param-indexes]} (get signatures name)
+                            ;; a parameter with its own guard keeps it
+                            guarded (cond-> (into (set closure-param-indexes)
+                                                  i64-pair-chain-param-indexes)
+                                      (closure-dispatcher? name params) (conj 0))
+                            indexes (set (filter #(and (contains? #{nil :i64} (nth param-types % nil))
+                                                       (not (contains? guarded %)))
+                                                 (pair-word-param-indexes params body)))]
+                        (when (seq indexes) [name indexes]))))
+              (:functions kir))
         _ (when-not (and (= (count exports) (count (distinct exports)))
                          ;; Only a deliberate entryless empty vector is a
                          ;; zero-export library; keep implicit empty programs
@@ -2477,10 +2535,14 @@
                                                              (and closure-dispatcher?
                                                                   (zero? index)))
                                                        (str "assertClosure(" param-js-name ")")
-                                                       (if (contains? i64-pair-chain-param-indexes
-                                                                      index)
-                                                         (str "assertI64PairChain("
-                                                              param-js-name ")")
+                                                       (cond
+                                                         (contains? i64-pair-chain-param-indexes index)
+                                                         (str "assertI64PairChain(" param-js-name ")")
+
+                                                         (contains? (get pair-word-params name) index)
+                                                         (str "assertPairWord(" param-js-name ")")
+
+                                                         :else
                                                          (guard-expr type param-js-name internal?)))
                                                      ";"))
                                               (map vector param-js-names param-types)))]
@@ -2565,6 +2627,10 @@
                     "const jsCaptureValue=c=>{if(!isCapture(c))throw new Error('invalid-js-capture-cell');return c[0];};"
                     "const capturePairFirst=c=>{if(isCapture(c))throw new Error('js-capture-projection');return c[0];};"))
              "const assertClosure=v=>{if(!Array.isArray(v)||v.length!==2)throw new Error('invalid-closure');assertI64(v[0]);let c=v[1],n=0;while(c!==0n){if(!Array.isArray(c)||c.length!==2||++n>5)throw new Error('invalid-closure-capture-chain');c=c[1];}return v;};"
+             (when (seq pair-word-params)
+               ;; Only a module with a pair-reading internal parameter uses
+               ;; it; every other artifact keeps its bytes.
+               "const assertPairWord=v=>{if(Array.isArray(v)){if(v.length!==2)throw new Error('invalid-i64');return v;}return assertI64(v);};")
              "const assertI64PairChain=v=>{let c=v,n=0;while(c!==0n){if(!Array.isArray(c)||c.length!==2)throw new Error('invalid-i64-pair-chain');if(++n>4)throw new Error('i64-pair-chain-limit');assertI64(c[0]);c=c[1];}return v;};"
              "const i32Wrap=v=>BigInt.asIntN(32,assertI64(v));"
              "const u32Wrap=v=>BigInt.asUintN(32,assertI64(v));"
