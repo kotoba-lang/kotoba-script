@@ -580,18 +580,32 @@
         (nth args 2))
     (let [types (mapv #(infer-type % env signatures) args)]
     (cond
-      (contains? '#{+ - * quot bit-xor bit-and min max} op)
-      (do (require-arity! op args (if (contains? '#{quot bit-xor bit-and min max} op)
+      (contains? '#{+ - * quot bit-xor bit-and bit-or min max} op)
+      (do (require-arity! op args (if (contains? '#{quot bit-xor bit-and bit-or min max} op)
                                     2 :positive))
           (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
 
-      (contains? '#{i32-wrap u32-wrap xorshift32} op)
+      (contains? '#{i32-wrap u32-wrap xorshift32 bit-not} op)
       (do (require-arity! op args 1)
           (require-type! (first types) :i64 (first args)) :i64)
 
       (contains? '#{i32-wrapping-add i32-wrapping-mul i32-xor} op)
       (do (require-arity! op args 2)
           (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg)) :i64)
+
+      ;; Unlike the i32 shifts, the count may be computed (`(* 8 i)` in a
+      ;; big-endian byte writer): kotoba-sema admits a non-literal count and
+      ;; relies on the backend's range guard, `shift64` below, which traps
+      ;; outside [0,63] exactly as `kotoba.kir`'s `checked-shift64` does. A
+      ;; literal count is still checked here, as the frontend does.
+      (contains? '#{i64-shift-left i64-shift-right u64-shift-right} op)
+      (do (require-arity! op args 2)
+          (doseq [[arg type] (map vector args types)] (require-type! type :i64 arg))
+          (when (and (int-literal? (second args))
+                     (not (<= 0 (int-value (second args)) 63)))
+            (fail! "i64 shift count literal must be in [0,63]"
+                   {:operation op :count (second args)}))
+          :i64)
 
       (contains? '#{i32-shift-left i32-shift-right u32-shift-right} op)
       (do (require-arity! op args 2)
@@ -1654,6 +1668,11 @@
       (= op 'max) (str "i64(" (a (first args)) ">" (a (second args)) "?" (a (first args)) ":" (a (second args)) ")")
       (= op 'bit-xor) (str "i64(" (str/join " ^ " (map a args)) ")")
       (= op 'bit-and) (str "i64(" (str/join " & " (map a args)) ")")
+      (= op 'bit-or) (str "i64(" (str/join " | " (map a args)) ")")
+      (= op 'bit-not) (str "i64(~" (a (first args)) ")")
+      (= op 'i64-shift-left) (str "i64Shl(" (a (first args)) "," (a (second args)) ")")
+      (= op 'i64-shift-right) (str "i64Shr(" (a (first args)) "," (a (second args)) ")")
+      (= op 'u64-shift-right) (str "u64Shr(" (a (first args)) "," (a (second args)) ")")
       (= op 'i32-wrap) (str "i32Wrap(" (a (first args)) ")")
       (= op 'u32-wrap) (str "u32Wrap(" (a (first args)) ")")
       (= op 'i32-wrapping-add) (str "i32Add(" (a (first args)) "," (a (second args)) ")")
@@ -2430,6 +2449,12 @@
                                (and (seq? form)
                                     (contains? '#{js-capture-new js-capture-value} (first form))))
                              (mapcat #(tree-seq coll? seq (:body %)) (:functions kir))))
+        i64-shifts? (boolean
+                     (some (fn [form]
+                             (and (seq? form)
+                                  (contains? '#{i64-shift-left i64-shift-right u64-shift-right}
+                                             (first form))))
+                           (mapcat #(tree-seq coll? seq (:body %)) (:functions kir))))
         functions (with-meta (set function-names) {:js-capture-cells? capture-cells?})
         _ (when-not (= (count function-names) (count functions))
             (fail! "KIR function names are not unique" {:functions function-names}))
@@ -2575,6 +2600,17 @@
              "const i32Shl=(v,s)=>BigInt.asIntN(32,i32Wrap(v)<<shift32(s));"
              "const i32Shr=(v,s)=>i32Wrap(v)>>shift32(s);"
              "const u32Shr=(v,s)=>u32Wrap(v)>>shift32(s);"
+             (when i64-shifts?
+               ;; Only a module that shifts an i64 carries these, like the
+               ;; capture helpers above, so every existing artifact's bytes
+               ;; (and the goldens pinning them) stay exact. The count guard
+               ;; is `kotoba.kir`'s `checked-shift64`: a count outside [0,63]
+               ;; traps instead of being masked. `u64Shr` shifts the unsigned
+               ;; reading of the bits and answers the signed word again.
+               (str "const shift64=s=>{s=assertI64(s);if(s<0n||s>63n)throw new Error('i64-shift-count-out-of-range');return s;};"
+                    "const i64Shl=(v,s)=>BigInt.asIntN(64,assertI64(v)<<shift64(s));"
+                    "const i64Shr=(v,s)=>assertI64(v)>>shift64(s);"
+                    "const u64Shr=(v,s)=>BigInt.asIntN(64,BigInt.asUintN(64,assertI64(v))>>shift64(s));"))
              "const xorshift32=v=>{let x=u32Wrap(v);x=BigInt.asUintN(32,x^(x<<13n));"
              "x=BigInt.asUintN(32,x^(x>>17n));return BigInt.asUintN(32,x^(x<<5n));};"
              "const assertF64=v=>{if(typeof v!=='number')throw new Error('invalid-f64');return v;};"
