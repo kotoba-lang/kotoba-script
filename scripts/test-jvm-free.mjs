@@ -29,7 +29,7 @@ try {
   for (const name of ['java', 'javac', 'clojure', 'clj']) {
     writeFileSync(join(temp, name), '#!/bin/sh\n: > "$KOTOBA_JVM_MARKER"\nexit 97\n', { mode: 0o755 });
   }
-  for (const test of ['test/nbb/fuel.cljk', 'test/nbb/differential.cljk', 'test/nbb/empty_library.cljk', 'test/nbb/js_value.cljk', 'test/nbb/js_operations.cljk', 'test/nbb/js_branding.cljk', 'test/nbb/js_undefined.cljk', 'test/nbb/js_captures.cljk', 'test/nbb/js_descriptor.cljk', 'test/nbb/empty_records.cljk', 'test/nbb/document_bytes_link.cljk', 'test/nbb/parity.cljk']) {
+  for (const test of ['test/nbb/fuel.cljk', 'test/nbb/differential.cljk', 'test/nbb/empty_library.cljk', 'test/nbb/js_value.cljk', 'test/nbb/js_operations.cljk', 'test/nbb/js_branding.cljk', 'test/nbb/js_undefined.cljk', 'test/nbb/js_captures.cljk', 'test/nbb/js_descriptor.cljk', 'test/nbb/empty_records.cljk', 'test/nbb/document_bytes_link.cljk', 'test/nbb/i64_shifts.cljk', 'test/nbb/parity.cljk']) {
     const result = spawnSync(process.execPath,
       [join(root, 'node_modules/nbb/cli.js'), '--config', config, test],
       { cwd: root, stdio: 'inherit', timeout: 120000,
@@ -38,7 +38,7 @@ try {
     if (existsSync(marker)) throw new Error(`JVM executable invoked by ${test}`);
     if (result.error || result.status !== 0) throw new Error(`${test} failed: ${result.error || result.status}`);
   }
-  console.log('JVM-free acceptance: 201 assertions and 109 parity checks; no JVM fallback observed.');
+  console.log('JVM-free acceptance: 207 assertions and 109 parity checks; no JVM fallback observed.');
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
