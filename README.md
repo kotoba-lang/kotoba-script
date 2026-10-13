@@ -2,11 +2,11 @@
 
 Restricted JavaScript backend for Kotoba. This package accepts only checked
 `kotoba.kir/v3` or typed `kotoba.kir/v4` data produced by
-`kotoba-lang/compiler`; it does not parse
+`kotoba-lang/amu`; it does not parse
 `.kotoba` source and does not own language semantics.
 
 ```text
-.kotoba -> kotoba-lang/compiler -> checked KIR -> kotoba-script -> .mjs
+.kotoba -> kotoba-lang/amu -> checked KIR -> kotoba-script -> .mjs
 ```
 
 ## Runtimes: JVM and nbb, same bytes
